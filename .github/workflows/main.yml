@@ -1,0 +1,135 @@
+# scripts/gee_export_tasks.py
+import ee
+import os
+import json
+from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv("../config/template_config.env")  # In GitHub Actions we will write real env file
+
+SERVICE_ACCOUNT = os.getenv("SERVICE_ACCOUNT_EMAIL")
+KEYPATH = os.getenv("SERVICE_ACCOUNT_KEYPATH")       # path to service account JSON
+GCS_BUCKET = os.getenv("GCS_BUCKET")                 # e.g., "kku-geoviz-gee-exports"
+TAMBON_ASSET = os.getenv("TAMBON_ASSET")             # e.g., "users/your_user/tambon_9_provinces"
+EXPORT_PREFIX = os.getenv("EXPORT_PREFIX", "exports")
+YEAR = int(os.getenv("EXPORT_YEAR", datetime.today().year))
+MONTH = int(os.getenv("EXPORT_MONTH", datetime.today().month))
+
+# Initialize EE
+credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYPATH)
+ee.Initialize(credentials)
+
+def start_ndvi_export(year, month):
+    start = ee.Date.fromYMD(year, month, 1)
+    end = start.advance(1, 'month')
+    # MODIS NDVI: scale factor 0.0001; collection ID used here may be adjusted
+    modis = ee.ImageCollection('MODIS/061/MOD13A2').select('NDVI') \
+            .filterDate(start, end) \
+            .map(lambda i: i.multiply(0.0001))
+    img = modis.mean().set('year', year).set('month', month)
+    fc = img.reduceRegions(collection=ee.FeatureCollection(TAMBON_ASSET),
+                           reducer=ee.Reducer.mean().combine(ee.Reducer.count(), '', True),
+                           scale=1000)
+    desc = f'ndvi_tambon_{year}_{month:02d}'
+    task = ee.batch.Export.table.toCloudStorage(collection=fc,
+                                               description=desc,
+                                               bucket=GCS_BUCKET,
+                                               fileNamePrefix=f'{EXPORT_PREFIX}/{desc}',
+                                               fileFormat='CSV')
+    task.start()
+    return {'var':'NDVI','desc':desc,'task_id':task.id}
+
+def start_lst_export(year, month):
+    # MODIS LST: MOD11A2 (8-day) or MOD11A1 (daily). Example uses MOD11A2 and picks 'LST_Day_1km'
+    start = ee.Date.fromYMD(year, month, 1)
+    end = start.advance(1, 'month')
+    col = ee.ImageCollection('MODIS/061/MOD11A2').select('LST_Day_1km') \
+          .filterDate(start, end) \
+          .map(lambda i: i.multiply(0.02))  # example scale factor
+    img = col.mean().set('year', year).set('month', month)
+    fc = img.reduceRegions(collection=ee.FeatureCollection(TAMBON_ASSET),
+                           reducer=ee.Reducer.mean().combine(ee.Reducer.count(), '', True),
+                           scale=1000)
+    desc = f'lst_tambon_{year}_{month:02d}'
+    task = ee.batch.Export.table.toCloudStorage(collection=fc,
+                                               description=desc,
+                                               bucket=GCS_BUCKET,
+                                               fileNamePrefix=f'{EXPORT_PREFIX}/{desc}',
+                                               fileFormat='CSV')
+    task.start()
+    return {'var':'LST','desc':desc,'task_id':task.id}
+
+def start_rain_export(year, month):
+    # CHIRPS daily -> sum over month
+    start = ee.Date.fromYMD(year, month, 1)
+    end = start.advance(1, 'month')
+    col = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterDate(start, end).select('precipitation')
+    img = col.sum().set('year', year).set('month', month)
+    fc = img.reduceRegions(collection=ee.FeatureCollection(TAMBON_ASSET),
+                           reducer=ee.Reducer.sum().combine(ee.Reducer.count(), '', True),
+                           scale=5000)
+    desc = f'rain_tambon_{year}_{month:02d}'
+    task = ee.batch.Export.table.toCloudStorage(collection=fc,
+                                               description=desc,
+                                               bucket=GCS_BUCKET,
+                                               fileNamePrefix=f'{EXPORT_PREFIX}/{desc}',
+                                               fileFormat='CSV')
+    task.start()
+    return {'var':'RAIN','desc':desc,'task_id':task.id}
+
+def start_smap_export(year, month):
+    # Example SMAP surface soil moisture collection placeholder (actual collection name may differ)
+    start = ee.Date.fromYMD(year, month, 1)
+    end = start.advance(1, 'month')
+    # Using example collection; adjust if different
+    col = ee.ImageCollection('NASA_USDA/HSL/SMAP10KM_soil_moisture').filterDate(start, end).select('ssm')
+    img = col.mean().set('year', year).set('month', month)
+    fc = img.reduceRegions(collection=ee.FeatureCollection(TAMBON_ASSET),
+                           reducer=ee.Reducer.mean().combine(ee.Reducer.count(), '', True),
+                           scale=10000)
+    desc = f'smap_tambon_{year}_{month:02d}'
+    task = ee.batch.Export.table.toCloudStorage(collection=fc,
+                                               description=desc,
+                                               bucket=GCS_BUCKET,
+                                               fileNamePrefix=f'{EXPORT_PREFIX}/{desc}',
+                                               fileFormat='CSV')
+    task.start()
+    return {'var':'SMAP','desc':desc,'task_id':task.id}
+
+def start_fire_export(year, month):
+    # Use VIIRS or MODIS active fire points and count them per polygon
+    start = ee.Date.fromYMD(year, month, 1)
+    end = start.advance(1, 'month')
+    fires = ee.FeatureCollection('FIRMS') \
+            .filterDate(start, end)  # placeholder; adjust to correct FIRMS collection ID in your GEE
+    # For point collections, we perform a join/count: rasterize or use reduceRegions with reducer.count()
+    # A simple approach: create raster with constant 1 at fire locations then reduce
+    pts_img = fires.map(lambda f: ee.Image.constant(1).rename('fire').reduceToImage(['system:index'], ee.Reducer.first())).sum()
+    # But above may be complex — for simplicity, we'll do a geometry-based counting per feature using iterate (client-side heavy)
+    # Instead, we export a feature collection of counts via a map that counts intersects (server-side)
+    def count_fires(feature):
+        c = fires.filterBounds(feature.geometry()).size()
+        return feature.set('fire_count', c)
+    fc = ee.FeatureCollection(TAMBON_ASSET).map(count_fires)
+    desc = f'firecount_tambon_{year}_{month:02d}'
+    task = ee.batch.Export.table.toCloudStorage(collection=fc,
+                                               description=desc,
+                                               bucket=GCS_BUCKET,
+                                               fileNamePrefix=f'{EXPORT_PREFIX}/{desc}',
+                                               fileFormat='CSV')
+    task.start()
+    return {'var':'FIRE','desc':desc,'task_id':task.id}
+
+if __name__ == "__main__":
+    tasks = []
+    tasks.append(start_ndvi_export(YEAR, MONTH))
+    tasks.append(start_lst_export(YEAR, MONTH))
+    tasks.append(start_rain_export(YEAR, MONTH))
+    tasks.append(start_smap_export(YEAR, MONTH))
+    tasks.append(start_fire_export(YEAR, MONTH))
+
+    # Save started tasks metadata so poller can check them
+    with open("../outputs/gee_tasks.json", "w") as f:
+        json.dump({'year': YEAR, 'month': MONTH, 'tasks': tasks}, f, indent=2)
+
+    print("Started tasks:", tasks)
