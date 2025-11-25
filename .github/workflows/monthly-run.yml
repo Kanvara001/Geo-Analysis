@@ -1,0 +1,96 @@
+name: Monthly GEE Processing
+
+on:
+  schedule:
+    - cron: "0 0 1 * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------
+      # 1) Checkout Repo
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # 2) Setup Python
+      # ------------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      # ------------------------------------------------------------
+      # 3) Install dependencies
+      # ------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pandas numpy google-cloud-storage earthengine-api
+
+      # ------------------------------------------------------------
+      # 4) Create config folder
+      # ------------------------------------------------------------
+      - name: Create config directory
+        run: mkdir -p config
+
+      # ------------------------------------------------------------
+      # 5) Save Service Account JSON (from GitHub Secrets)
+      # ------------------------------------------------------------
+      - name: Save service account key
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" > config/sa.json
+
+      # ------------------------------------------------------------
+      # 6) Create environment file (template_config.env)
+      # ------------------------------------------------------------
+      - name: Create config env file
+        run: |
+          echo "SERVICE_ACCOUNT_EMAIL=${{ secrets.GCP_SA_EMAIL }}" >> config/template_config.env
+          echo "SERVICE_ACCOUNT_KEYPATH=${{ github.workspace }}/config/sa.json" >> config/template_config.env
+          echo "GCS_BUCKET=${{ secrets.GCS_BUCKET }}" >> config/template_config.env
+          echo "TAMBON_ASSET=${{ secrets.TAMBON_ASSET }}" >> config/template_config.env
+
+      # ------------------------------------------------------------
+      # 7) Authenticate Earth Engine with Service Account
+      # ------------------------------------------------------------
+      - name: Authenticate Earth Engine
+        run: |
+          python - <<EOF
+          import ee
+          ee.Authenticate(
+              auth_mode='SERVICE_ACCOUNT',
+              service_account='${{ secrets.GCP_SA_EMAIL }}',
+              key_file='config/sa.json'
+          )
+          ee.Initialize()
+          print("Earth Engine authenticated successfully.")
+          EOF
+
+      # ------------------------------------------------------------
+      # 8) Create required folders
+      # ------------------------------------------------------------
+      - name: Create folders
+        run: |
+          mkdir -p exports_raw
+          mkdir -p outputs
+
+      # ------------------------------------------------------------
+      # 9) Run data processing & cleaning pipeline
+      # ------------------------------------------------------------
+      - name: Run Data Processing Pipeline
+        run: |
+          python scripts/gee_poll_download_process.py
+
+      # ------------------------------------------------------------
+      # 10) Commit results back to repo
+      # ------------------------------------------------------------
+      - name: Commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update monthly GEE clean data"
+          file_pattern: outputs/*.csv
