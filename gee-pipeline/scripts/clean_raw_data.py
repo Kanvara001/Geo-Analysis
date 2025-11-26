@@ -156,7 +156,21 @@ def apply_cleaning(ndvi_df, lst_df, smap_df, rain_df, fire_df):
             out_rows.append({'province':prov,'amphoe':amp,'tambon':tam,'variable':'FIRE','value': s_fire.loc[dt] if dt in s_fire.index else 0, 'year':y,'month':m})
 
     outdf = pd.DataFrame(out_rows)
+
+    # --- รีเรียงคอลัมน์ตามที่ต้องการ ---
+    ordered_cols = [
+        'year',
+        'month',
+        'province',
+        'amphoe',
+        'tambon',
+        'variable',
+        'value'
+    ]
+    outdf = outdf[ordered_cols]
+    
     return outdf
+
 
 if __name__ == "__main__":
     ndvi_df = load_var_parquets('NDVI')
