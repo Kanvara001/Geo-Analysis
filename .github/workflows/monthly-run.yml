@@ -1,96 +1,73 @@
-name: Monthly GEE Processing
+name: GEE Monthly Pipeline
 
 on:
   schedule:
-    - cron: "0 0 1 * *"
-  workflow_dispatch: {}
+    - cron: "0 3 2 * *"    # รันทุกวันที่ 2 เวลา 03:00 UTC (10:00 ไทย)
+  workflow_dispatch:        # สามารถกดรันเองได้
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      # ------------------------------------------------------------
+      # -------------------------------
       # 1) Checkout Repo
-      # ------------------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # -------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-      # ------------------------------------------------------------
+      # -------------------------------
       # 2) Setup Python
-      # ------------------------------------------------------------
+      # -------------------------------
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      # ------------------------------------------------------------
-      # 3) Install dependencies
-      # ------------------------------------------------------------
-      - name: Install dependencies
+      # -------------------------------
+      # 3) Install Dependencies
+      # -------------------------------
+      - name: Install requirements
         run: |
-          pip install --upgrade pip
-          pip install pandas numpy google-cloud-storage earthengine-api
+          python -m pip install --upgrade pip
+          pip install -r gee-pipeline/requirements.txt
 
-      # ------------------------------------------------------------
-      # 4) Create config folder
-      # ------------------------------------------------------------
-      - name: Create config directory
-        run: mkdir -p config
-
-      # ------------------------------------------------------------
-      # 5) Save Service Account JSON (from GitHub Secrets)
-      # ------------------------------------------------------------
-      - name: Save service account key
+      # -------------------------------
+      # 4) Create Service Account Key File
+      # -------------------------------
+      - name: Setup Service Account Key
         run: |
-          echo "${{ secrets.GCP_SA_KEY }}" > config/sa.json
+          mkdir -p gee-pipeline/config
+          echo "${{ secrets.GEE_SERVICE_KEY }}" > gee-pipeline/config/service_key.json
 
-      # ------------------------------------------------------------
-      # 6) Create environment file (template_config.env)
-      # ------------------------------------------------------------
-      - name: Create config env file
+      # -------------------------------
+      # 5) Run RAW Export Tasks (GEE → GCS)
+      # -------------------------------
+      - name: Export RAW Data Tasks
         run: |
-          echo "SERVICE_ACCOUNT_EMAIL=${{ secrets.GCP_SA_EMAIL }}" >> config/template_config.env
-          echo "SERVICE_ACCOUNT_KEYPATH=${{ github.workspace }}/config/sa.json" >> config/template_config.env
-          echo "GCS_BUCKET=${{ secrets.GCS_BUCKET }}" >> config/template_config.env
-          echo "TAMBON_ASSET=${{ secrets.TAMBON_ASSET }}" >> config/template_config.env
+          python gee-pipeline/scripts/gee_export_tasks.py
 
-      # ------------------------------------------------------------
-      # 7) Authenticate Earth Engine with Service Account
-      # ------------------------------------------------------------
-      - name: Authenticate Earth Engine
+      # -------------------------------
+      # 6) Poll Finished Tasks → Download → Convert Parquet
+      # -------------------------------
+      - name: Poll & Convert RAW Data
         run: |
-          python - <<EOF
-          import ee
-          ee.Authenticate(
-              auth_mode='SERVICE_ACCOUNT',
-              service_account='${{ secrets.GCP_SA_EMAIL }}',
-              key_file='config/sa.json'
-          )
-          ee.Initialize()
-          print("Earth Engine authenticated successfully.")
-          EOF
+          python gee-pipeline/scripts/poll_download_convert.py
 
-      # ------------------------------------------------------------
-      # 8) Create required folders
-      # ------------------------------------------------------------
-      - name: Create folders
+      # -------------------------------
+      # 7) Clean RAW Data → Combined Final Output
+      # -------------------------------
+      - name: Clean & Combine RAW Data
         run: |
-          mkdir -p exports_raw
-          mkdir -p outputs
+          python gee-pipeline/scripts/clean_raw_data.py
 
-      # ------------------------------------------------------------
-      # 9) Run data processing & cleaning pipeline
-      # ------------------------------------------------------------
-      - name: Run Data Processing Pipeline
+      # -------------------------------
+      # 8) Commit updated outputs back to repo
+      # -------------------------------
+      - name: Commit Updated Output
         run: |
-          python scripts/gee_poll_download_process.py
-
-      # ------------------------------------------------------------
-      # 10) Commit results back to repo
-      # ------------------------------------------------------------
-      - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Auto-update monthly GEE clean data"
-          file_pattern: outputs/*.csv
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add gee-pipeline/outputs/*
+          git commit -m "Update monthly data" || echo "No changes to commit"
+          git push
