@@ -25,7 +25,14 @@ jobs:
 
       - name: Create service account key
         run: |
+          mkdir -p gee-pipeline
           echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
+
+      - name: Debug service key
+        run: |
+          echo "----- JSON START -----"
+          cat gee-pipeline/service-key.json
+          echo "----- JSON END -----"
 
       - name: Install dependencies
         run: |
