@@ -1,29 +1,31 @@
 name: Monthly GEE Pipeline
 
 on:
-  schedule:
-    - cron: "0 2 2 * *"    # ทุกวันที่ 2 เวลา 02:00 UTC
   workflow_dispatch:
+  schedule:
+    - cron: "0 0 1 * *"
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
 
+    env:
+      SERVICE_ACCOUNT: "gee-runner@geo-analysis-472713.iam.gserviceaccount.com"
+      GCS_BUCKET: "geo-analysis-472713-bucket"
+      GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Create service key file
-        run: |
-          echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
-
-        env:
-          SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v3
         with:
-          python-version: "3.10"
+          python-version: 3.10
+
+      - name: Create service account key
+        run: |
+          echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
 
       - name: Install dependencies
         run: |
@@ -32,15 +34,11 @@ jobs:
       - name: Run Export Tasks
         run: |
           python gee-pipeline/scripts/gee_export_tasks.py
-        env:
-          SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-          GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
 
-      - name: Poll, download, convert
+      - name: Poll Downloads
         run: |
           python gee-pipeline/scripts/poll_download_convert.py
 
-      - name: Clean data
+      - name: Clean Raw Data
         run: |
           python gee-pipeline/scripts/clean_raw_data.py
