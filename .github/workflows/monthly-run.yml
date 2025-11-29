@@ -3,50 +3,53 @@ name: Monthly GEE Pipeline
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 2 * *"   # รันทุกวันที่ 2 ของเดือน
+    - cron: "0 0 1 * *"
 
 jobs:
-  run-pipeline:
+  run-gee:
     runs-on: ubuntu-latest
 
-    env:
-      SERVICE_ACCOUNT: "gee-runner@geo-analysis-472713.iam.gserviceaccount.com"
-      GCS_BUCKET: "geo-analysis-472713-bucket"
-      GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+    - name: Setup Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
 
-      - name: Create service account key
-        run: |
-          mkdir -p gee-pipeline
-          echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r gee-pipeline/requirements.txt
 
-      - name: Debug service key
-        run: |
-          echo "----- JSON START -----"
-          cat gee-pipeline/service-key.json
-          echo "----- JSON END -----"
+    - name: Create service-key.json
+      env:
+        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
+      run: |
+        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r gee-pipeline/requirements.txt
+    - name: DEBUG — Show generated JSON
+      run: |
+        echo "----- JSON START -----"
+        cat gee-pipeline/service-key.json
+        echo "----- JSON END -----"
 
-      - name: Run GEE Export Tasks
-        run: |
-          python gee-pipeline/scripts/gee_export_tasks.py
+    - name: Run Export Script
+      env:
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+      run: |
+        python gee-pipeline/scripts/gee_export_tasks.py
 
-      - name: Poll & Download Exported Files
-        run: |
-          python gee-pipeline/scripts/poll_download_convert.py
+    - name: Download & Convert
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+      run: |
+        python gee-pipeline/scripts/poll_download_convert.py
 
-      - name: Clean Raw Data
-        run: |
-          python gee-pipeline/scripts/clean_raw_data.py
+    - name: Clean Raw Data
+      run: |
+        python gee-pipeline/scripts/clean_raw_data.py
