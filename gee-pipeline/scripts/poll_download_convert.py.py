@@ -1,105 +1,110 @@
-# scripts/poll_download_convert.py
-import ee, os, time, json, pandas as pd
-from dotenv import load_dotenv
-from google.cloud import storage
+#!/usr/bin/env python3
+"""
+poll_download_convert.py
+- Poll Earth Engine tasks status (optional)
+- List/download CSVs from GCS under raw/ prefix
+- Convert each CSV to Parquet and save in gee-pipeline/outputs/raw_parquet/<VAR>/<YYYY>/<MM>/
+"""
+
+import os
+import time
+import json
 from pathlib import Path
+import pandas as pd
+from google.cloud import storage
+import ee
+from dotenv import load_dotenv
 
-load_dotenv("config/template_config.env")
-SERVICE_ACCOUNT = os.getenv("SERVICE_ACCOUNT_EMAIL")
-KEYPATH = os.getenv("SERVICE_ACCOUNT_KEYPATH")
-BUCKET = os.getenv("GCS_BUCKET")
+load_dotenv(Path(__file__).parents[1] / "config" / "config.env")
 
-ee.Initialize(ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYPATH))
-client = storage.Client.from_service_account_json(KEYPATH)
-bucket = client.bucket(BUCKET)
+SERVICE_ACCOUNT = os.environ.get("SERVICE_ACCOUNT") or os.environ.get("GEE_SERVICE_EMAIL")
+KEY_PATH = os.environ.get("KEY_PATH", "gee-pipeline/service-key.json")
+GCS_BUCKET = os.environ.get("GCS_BUCKET")
 
-TASKS_META = 'outputs/raw_export_tasks.json'
-DOWNLOAD_DIR = Path('outputs/raw_download')
-PARQUET_DIR = Path('outputs/raw_parquet')
+if not SERVICE_ACCOUNT or not KEY_PATH or not GCS_BUCKET:
+    raise ValueError("Please set SERVICE_ACCOUNT, KEY_PATH, and GCS_BUCKET environment variables")
 
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+# Initialize EE and GCS client
+credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_PATH)
+ee.Initialize(credentials)
 
-def wait_for_completion(task_ids, timeout=24*3600, poll_interval=20):
-    start = time.time()
-    completed = set()
-    while time.time() - start < timeout:
-        tasks = ee.batch.Task.list()
-        status = {t.id: t.status().get('state') for t in tasks}
-        for tid in task_ids:
-            st = status.get(tid)
-            if st == 'COMPLETED' and tid not in completed:
-                completed.add(tid)
-                print("Completed:", tid)
-            elif st == 'FAILED':
-                raise RuntimeError(f"Task failed: {tid}")
-        if len(completed) == len(task_ids):
-            return True
-        time.sleep(poll_interval)
-    raise TimeoutError("Timeout waiting for tasks to finish.")
+from google.oauth2 import service_account
+import google.auth.transport.requests
 
-def download_prefixes(prefixes):
-    downloaded = []
-    for prefix in prefixes:
-        blobs = client.list_blobs(BUCKET, prefix=prefix)
-        for blob in blobs:
-            if blob.name.endswith('.csv'):
-                local = DOWNLOAD_DIR / os.path.basename(blob.name)
-                blob.download_to_filename(str(local))
-                downloaded.append(local)
-                print("Downloaded", local)
-    return downloaded
+# Build GCS client using the same service account key
+sa_creds = service_account.Credentials.from_service_account_file(KEY_PATH)
+storage_client = storage.Client(credentials=sa_creds, project=sa_creds.project_id)
+bucket = storage_client.bucket(GCS_BUCKET)
 
-def csv_to_parquet(csv_paths):
-    out_paths = []
-    for p in csv_paths:
-        df = pd.read_csv(p)
-        # sometimes GEE CSV contains .geo column with geometry -- keep or drop as needed
-        # ensure columns: province/amphoe/tambon are present; if not, try to detect name fields
-        # convert image date if present
-        if 'system:time_start' in df.columns:
-            df.rename(columns={'system:time_start':'image_date'}, inplace=True)
-        # Try to coerce numeric columns
-        for c in df.columns:
-            try:
-                df[c] = pd.to_numeric(df[c], errors='ignore')
-            except:
-                pass
-        # write parquet by var/year/month structure extracted from filename (naive)
-        fname = p.name
-        # determine var from filename
-        if 'NDVI' in fname.upper():
-            var = 'NDVI'
-        elif 'LST' in fname.upper():
-            var = 'LST'
-        elif 'RAIN' in fname.upper():
-            var = 'RAIN'
-        elif 'SMAP' in fname.upper():
-            var = 'SMAP'
-        elif 'FIRE' in fname.upper():
-            var = 'FIRE'
-        else:
-            var = 'OTHER'
-        # target path
-        # try to get year/month from any date column
-        year = df['image_date'].str.slice(0,4).iloc[0] if 'image_date' in df.columns and not df['image_date'].isna().all() else 'unknown'
-        month = df['image_date'].str.slice(5,7).iloc[0] if 'image_date' in df.columns and not df['image_date'].isna().all() else '00'
-        dest_dir = PARQUET_DIR / var / year / month
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        outp = dest_dir / (p.stem + '.parquet')
-        df.to_parquet(outp, index=False)
-        out_paths.append(outp)
-        print("Wrote parquet:", outp)
-    return out_paths
+OUT_DOWNLOAD = Path(__file__).parents[1] / "outputs" / "raw_download"
+OUT_PARQUET = Path(__file__).parents[1] / "outputs" / "raw_parquet"
+OUT_DOWNLOAD.mkdir(parents=True, exist_ok=True)
+OUT_PARQUET.mkdir(parents=True, exist_ok=True)
 
-if __name__ == "__main__":
-    with open(TASKS_META) as f:
-        tasks = json.load(f)
-    task_ids = [t['task_id'] for t in tasks]
-    print("Waiting for tasks (count):", len(task_ids))
-    wait_for_completion(task_ids, timeout=48*3600)
-    prefixes = list({t.get('prefix') for t in tasks if t.get('prefix')})
-    print("Downloading prefixes:", prefixes)
-    downloaded = download_prefixes(prefixes)
-    csv_to_parquet(downloaded)
-    print("All done.")
+# helper to list blobs under prefix
+def list_blobs_prefix(prefix):
+    blobs = storage_client.list_blobs(GCS_BUCKET, prefix=prefix)
+    return [b for b in blobs]
+
+# Wait logic: optional check for running tasks (we will wait until there is at least one CSV in bucket)
+print("Polling GCS for exported CSVs under prefix 'raw/' ...")
+wait_seconds = 10
+max_wait = 60 * 60 * 6  # up to 6 hours
+elapsed = 0
+found_any = False
+
+while elapsed < max_wait:
+    blobs = list_blobs_prefix("raw/")
+    csvs = [b for b in blobs if b.name.endswith(".csv") or b.name.endswith(".csv.gz")]
+    if len(csvs) > 0:
+        print("Found", len(csvs), "csv(s) in bucket.")
+        found_any = True
+        break
+    time.sleep(wait_seconds)
+    elapsed += wait_seconds
+    print(f"Waiting... {elapsed}s elapsed")
+
+if not found_any:
+    print("No CSVs found in bucket after waiting; exiting.")
+    exit(0)
+
+# Download CSVs and convert to parquet grouped by variable/year/month
+for blob in csvs:
+    name = blob.name  # e.g. raw/NDVI/2015/01/raw_NDVI_2015-01-01.csv
+    print("Processing blob:", name)
+    local_path = OUT_DOWNLOAD / Path(name).name
+    blob.download_to_filename(str(local_path))
+    print("Downloaded to", local_path)
+
+    try:
+        # read csv (GEE CSV often has .geo column; we'll handle)
+        df = pd.read_csv(local_path)
+    except Exception as e:
+        print("Error reading CSV, trying with engine python:", e)
+        df = pd.read_csv(local_path, engine='python')
+
+    # derive var/year/month from blob.name
+    parts = name.split('/')
+    # expecting ['raw', VAR, YYYY, MM, filename]
+    if len(parts) < 5:
+        print("Unexpected blob path structure:", parts)
+        # save to generic folder
+        dest_dir = OUT_PARQUET / "UNKNOWN"
+    else:
+        var = parts[1]
+        year = parts[2]
+        month = parts[3]
+        dest_dir = OUT_PARQUET / var / year / month
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # sometimes GEE outputs have columns like 'mean' or the band name; keep geometry columns if any
+    # normalize column names
+    df.columns = [c.strip() for c in df.columns]
+
+    # Save as parquet
+    out_file = dest_dir / (Path(name).stem + ".parquet")
+    df.to_parquet(out_file, index=False)
+    print("Wrote parquet:", out_file)
+
+print("All done converting CSVs to parquet.")
