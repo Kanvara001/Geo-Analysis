@@ -1,73 +1,63 @@
-name: GEE Monthly Pipeline
+name: Monthly GEE Pipeline
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: "0 3 2 * *"    # รันทุกวันที่ 2 เวลา 03:00 UTC (10:00 ไทย)
-  workflow_dispatch:        # สามารถกดรันเองได้
+    - cron: "0 3 2 * *"   # ทุกวันที่ 2 เวลา 03:00 UTC (10:00 ไทย) -- ตามที่คุณต้องการ
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-
     steps:
-      # -------------------------------
-      # 1) Checkout Repo
-      # -------------------------------
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # -------------------------------
-      # 2) Setup Python
-      # -------------------------------
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # -------------------------------
-      # 3) Install Dependencies
-      # -------------------------------
-      - name: Install requirements
+      - name: Write service account key
+        # Note: store raw JSON in secret GEE_SERVICE_KEY (or store base64 and change decoding here)
+        run: |
+          mkdir -p gee-pipeline
+          echo "${{ secrets.GEE_SERVICE_KEY }}" > gee-pipeline/service-key.json
+          # optional: ensure newline correctness
+          sed -i 's/\r$//' gee-pipeline/service-key.json
+          ls -l gee-pipeline/service-key.json
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r gee-pipeline/requirements.txt
 
-      # -------------------------------
-      # 4) Create Service Account Key File
-      # -------------------------------
-      - name: Setup Service Account Key
-        run: |
-          mkdir -p gee-pipeline/config
-          echo "${{ secrets.GEE_SERVICE_KEY }}" > gee-pipeline/config/service_key.json
-
-      # -------------------------------
-      # 5) Run RAW Export Tasks (GEE → GCS)
-      # -------------------------------
-      - name: Export RAW Data Tasks
+      - name: Export RAW data from GEE -> GCS
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_EMAIL }}
+          KEY_PATH: gee-pipeline/service-key.json
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+          TAMBON_ASSET: ${{ secrets.TAMBON_ASSET }}
+          START_YEAR: 2015
+          END_YEAR: 2024
         run: |
           python gee-pipeline/scripts/gee_export_tasks.py
 
-      # -------------------------------
-      # 6) Poll Finished Tasks → Download → Convert Parquet
-      # -------------------------------
-      - name: Poll & Convert RAW Data
+      - name: Poll GCS, download CSVs and convert to Parquet
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.GEE_SERVICE_EMAIL }}
+          KEY_PATH: gee-pipeline/service-key.json
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
         run: |
           python gee-pipeline/scripts/poll_download_convert.py
 
-      # -------------------------------
-      # 7) Clean RAW Data → Combined Final Output
-      # -------------------------------
-      - name: Clean & Combine RAW Data
+      - name: Clean RAW -> produce monthly cleaned combined
         run: |
           python gee-pipeline/scripts/clean_raw_data.py
 
-      # -------------------------------
-      # 8) Commit updated outputs back to repo
-      # -------------------------------
-      - name: Commit Updated Output
+      - name: Commit cleaned outputs
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add gee-pipeline/outputs/*
-          git commit -m "Update monthly data" || echo "No changes to commit"
-          git push
+          git add gee-pipeline/outputs || true
+          git commit -m "Update cleaned monthly data" || echo "No changes"
+          git push || echo "Push failed (maybe no permission)"
