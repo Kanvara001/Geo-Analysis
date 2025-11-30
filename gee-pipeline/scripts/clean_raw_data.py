@@ -1,96 +1,47 @@
 import pandas as pd
 import numpy as np
-import os
 import glob
+import os
 
-RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
-OUTPUT_CLEAN = "gee-pipeline/outputs/clean"
+RAW_DIR = "gee-pipeline/outputs/raw_parquet"
+OUT_DIR = "gee-pipeline/outputs/clean"
+os.makedirs(OUT_DIR, exist_ok=True)
 
-os.makedirs(OUTPUT_CLEAN, exist_ok=True)
-
-LONG_GAP_THRESHOLD = {
-    "NDVI": 2,
-    "LST": 2,
-    "SoilMoisture": 1,
-    "Rainfall": 1,
-    "FireCount": 1,
-}
-
-# -------------------------------------------
-# Load all parquet files (all variable folders)
-# -------------------------------------------
 def load_all():
-    files = glob.glob(f"{RAW_PARQUET_DIR}/**/*.parquet", recursive=True)
-
+    files = glob.glob(f"{RAW_DIR}/*.parquet")
     if len(files) == 0:
-        raise ValueError("❌ No parquet files found in raw_parquet/. Pipeline earlier step failed.")
-
-    dfs = []
-    for f in files:
-        try:
-            df = pd.read_parquet(f)
-            dfs.append(df)
-        except Exception as e:
-            print(f"⚠️ Failed to read {f}: {e}")
-
-    if len(dfs) == 0:
-        raise ValueError("❌ No usable parquet files loaded.")
-
+        print("⚠ No parquet files found. Skipping clean step.")
+        return None
+    dfs = [pd.read_parquet(f) for f in files]
     return pd.concat(dfs, ignore_index=True)
 
-# -------------------------------------------
-# Cleaning per variable
-# -------------------------------------------
-def clean_variable(df, var):
-    temp = df[df["variable"] == var].copy()
-
-    # convert value to numeric
-    temp["value"] = pd.to_numeric(temp["value"], errors="coerce")
-
-    # sort
-    temp = temp.sort_values(
-        ["province", "amphoe", "tambon", "year", "month"]
-    )
-
-    def fill_group(g):
-        s = g["value"]
-
-        # detect long gaps
-        long_gap = (
-            s.isna()
-            .astype(int)
-            .groupby((s.notna()).cumsum())
-            .transform("count")
-            .max()
-        )
-
-        if long_gap >= LONG_GAP_THRESHOLD.get(var, 2):
-            climatology = s.groupby(g["month"]).transform("mean")
-            new = s.fillna(climatology)
-        else:
-            new = s.interpolate()
-
-        return new
-
-    clean_values = temp.groupby(
-        ["province", "amphoe", "tambon"]
-    ).apply(fill_group)
-
-    temp["clean_value"] = clean_values.values
-    return temp
-
-# -------------------------------------------
-# RUN CLEANING
-# -------------------------------------------
 df = load_all()
+if df is None:
+    exit(0)
 
-cleaned = []
-for var in df["variable"].unique():
-    print(f"🧼 Cleaning variable → {var}")
-    cleaned.append(clean_variable(df, var))
+df["value"] = pd.to_numeric(df["mean"], errors="ignore").fillna(
+    pd.to_numeric(df["count"], errors="ignore")
+)
 
-out = pd.concat(cleaned)
-out_path = f"{OUTPUT_CLEAN}/cleaned_combined.csv"
+df = df.dropna(subset=["value"])
 
-out.to_csv(out_path, index=False)
-print(f"✔ Cleaning complete → {out_path}")
+LONG_GAP = {"NDVI": 2, "LST": 2, "SoilMoisture": 1}
+
+out_list = []
+for var, th in LONG_GAP.items():
+
+    tmp = df[df["variable"] == var].copy()
+    tmp = tmp.sort_values(["province","amphoe","tambon","year","month"])
+
+    def filler(g):
+        s = g["value"]
+        if s.isna().sum() >= th:
+            return s.fillna(s.mean())
+        return s.interpolate().fillna(method="bfill").fillna(method="ffill")
+
+    tmp["clean_value"] = tmp.groupby(["province","amphoe","tambon"])["value"].transform(filler)
+    out_list.append(tmp)
+
+out = pd.concat(out_list)
+out.to_csv(f"{OUT_DIR}/cleaned_combined.csv", index=False)
+print("✔ Clean complete → cleaned_combined.csv")
