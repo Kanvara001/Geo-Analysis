@@ -1,4 +1,4 @@
-# === gee_export_tasks.py (FINAL) ===
+# === gee_export_tasks.py ===
 
 import ee
 import json
@@ -12,7 +12,7 @@ SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
 with open(KEYFILE, "r") as f:
-    json.load(f)
+    key_data = json.load(f)
 
 credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
 ee.Initialize(credentials)
@@ -27,7 +27,7 @@ TAMBON = ee.FeatureCollection(
 RAW_OUTPUT = "raw_export"
 
 # -----------------------------
-# Get last month
+# Determine month to export
 # -----------------------------
 today = datetime.utcnow().replace(day=1)
 last_month = today - timedelta(days=1)
@@ -82,16 +82,21 @@ def export_month(variable, spec):
     ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(YEAR, MONTH))
     img = ic.select(spec["band"]).mean()
 
-    # Add properties from shapefile
+    # 🔥 เพิ่ม set() ใส่ province/amphoe/tambon
     zonal = img.reduceRegions(
-        collection=TAMBON,
+        collection=TAMBON.map(
+            lambda f: f.set({
+                "province": f.get("Province"),
+                "amphoe": f.get("District"),
+                "tambon": f.get("Subdistric"),
+            })
+        ),
         reducer=spec["reducer"],
         scale=spec["scale"],
-    ).map(
+    )
+
+    zonal = zonal.map(
         lambda f: f.set({
-            "province": f.get("pv_tn"),
-            "amphoe": f.get("ap_tn"),
-            "tambon": f.get("tb_tn"),
             "year": YEAR,
             "month": MONTH,
             "variable": variable,
@@ -107,10 +112,12 @@ def export_month(variable, spec):
         fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
         fileFormat="GeoJSON",
     )
-
     task.start()
     print(f"🚀 Submitted: {variable}_{YEAR}_{MONTH}")
 
+# -----------------------------
+# Run exports
+# -----------------------------
 if __name__ == "__main__":
     for var, spec in DATASETS.items():
         export_month(var, spec)
