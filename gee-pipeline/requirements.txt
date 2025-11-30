@@ -3,3 +3,6 @@ google-cloud-storage
 pandas
 pyarrow
 numpy
+geopandas
+pyproj
+shapely
