@@ -19,7 +19,7 @@ credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
 ee.Initialize(credentials)
 
 # -----------------------------
-# Load 9-province tambon geometry
+# Load geometry
 # -----------------------------
 TAMBON = ee.FeatureCollection(
     "projects/geo-analysis-472713/assets/shapefile_provinces"
@@ -35,7 +35,7 @@ YEARS = list(range(2015, 2025))
 MONTHS = list(range(1, 13))
 
 # -----------------------------
-# Datasets
+# Dataset definitions
 # -----------------------------
 DATASETS = {
     "NDVI": {
@@ -63,15 +63,14 @@ DATASETS = {
         "band": "precipitationCal",
     },
     "FireCount": {
-        "ic": "FIRMS/MODIS/C6_1/FIRE_EVENTS",
+        "ic": "MODIS/061/MOD14A1",      # 🔥 ใช้ dataset จริง
         "scale": 1000,
-        "reducer": ee.Reducer.count(),
-        "band": "brightness",
+        "band": "FireMask",
     },
 }
 
 # -----------------------------
-# Helper to create monthly filter
+# Helper for monthly interval
 # -----------------------------
 def month_filter(year, month):
     start = ee.Date.fromYMD(year, month, 1)
@@ -80,16 +79,29 @@ def month_filter(year, month):
 
 
 # -----------------------------
-# Export function
+# Export one month of one variable
 # -----------------------------
 def export_month(year, month, variable, spec):
+
     ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
 
     band = spec["band"]
-    reducer = spec["reducer"]
     scale = spec["scale"]
 
-    img = ic.select(band).mean()
+    # Special handling for fire count
+    if variable == "FireCount":
+        # FireMask: 0 = no fire, 2/3/4/... = active fire
+        fire = ic.select(band) \
+                 .map(lambda img: img.gt(0)) \
+                 .sum()   # count per pixel
+
+        img = fire
+
+        reducer = ee.Reducer.sum()
+
+    else:
+        reducer = spec["reducer"]
+        img = ic.select(band).mean()
 
     # Zonal statistics
     zonal = img.reduceRegions(
@@ -99,15 +111,12 @@ def export_month(year, month, variable, spec):
     )
 
     # Add metadata
-    zonal = zonal.map(
-        lambda f: f.set({
-            "year": year,
-            "month": month,
-            "variable": variable,
-        })
-    )
+    zonal = zonal.map(lambda f: f.set({
+        "year": year,
+        "month": month,
+        "variable": variable,
+    }))
 
-    # Export
     filename = f"{variable}_{year}_{month:02d}.geojson"
 
     task = ee.batch.Export.table.toCloudStorage(
@@ -122,7 +131,7 @@ def export_month(year, month, variable, spec):
 
 
 # -----------------------------
-# Run exports in batch
+# Batch runner
 # -----------------------------
 def run_all_exports():
     all_tasks = []
