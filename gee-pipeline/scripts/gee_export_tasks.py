@@ -3,8 +3,7 @@
 import ee
 import json
 import os
-import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # -----------------------------
 # Load service account
@@ -25,14 +24,18 @@ TAMBON = ee.FeatureCollection(
     "projects/geo-analysis-472713/assets/shapefile_provinces"
 )
 
-# -----------------------------
-# Config
-# -----------------------------
 RAW_OUTPUT = "raw_export"
-BATCH_SIZE = 20
 
-YEARS = list(range(2015, 2025))
-MONTHS = list(range(1, 13))
+# -----------------------------
+# Determine the month to export
+# -----------------------------
+today = datetime.utcnow().replace(day=1)
+last_month = today - timedelta(days=1)
+
+YEAR = last_month.year
+MONTH = last_month.month
+
+print(f"📆 Exporting YEAR={YEAR}, MONTH={MONTH}")
 
 # -----------------------------
 # Dataset configuration
@@ -51,43 +54,34 @@ DATASETS = {
         "band": "LST_Day_1km",
     },
     "SoilMoisture": {
-        "ic": "NASA/SMAP/SPL4SMGP/007",      # ← UPDATED (รุ่นใหม่)
+        "ic": "NASA/SMAP/SPL4SMGP/007",
         "scale": 10000,
         "reducer": ee.Reducer.mean(),
-        "band": "sm_surface",                # ← UPDATED (band ใหม่)
+        "band": "sm_surface",
     },
     "Rainfall": {
-        "ic": "NASA/GPM_L3/IMERG_V07",       # ← UPDATED
+        "ic": "NASA/GPM_L3/IMERG_V07",
         "scale": 10000,
         "reducer": ee.Reducer.sum(),
         "band": "precipitationCal",
     },
     "FireCount": {
-        "ic": "MODIS/061/MOD14A1",           # ← UPDATED ให้แมพกับ FIRMS root
+        "ic": "MODIS/061/MOD14A1",
         "scale": 1000,
         "reducer": ee.Reducer.count(),
-        "band": "FireMask",                  # ← UPDATED
+        "band": "FireMask",
     },
 }
 
-# -----------------------------
-# Filter for each month
-# -----------------------------
 def month_filter(year, month):
     start = ee.Date.fromYMD(year, month, 1)
     end = start.advance(1, "month")
     return start, end
 
-
-# -----------------------------
-# Export function
-# -----------------------------
-def export_month(year, month, variable, spec):
-    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
-
+def export_month(variable, spec):
+    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(YEAR, MONTH))
     img = ic.select(spec["band"]).mean()
 
-    # Zonal reduction
     zonal = img.reduceRegions(
         collection=TAMBON,
         reducer=spec["reducer"],
@@ -96,51 +90,29 @@ def export_month(year, month, variable, spec):
 
     zonal = zonal.map(
         lambda f: f.set({
-            "year": year,
-            "month": month,
+            "year": YEAR,
+            "month": MONTH,
             "variable": variable,
         })
     )
 
-    filename = f"{variable}_{year}_{month:02d}.geojson"
+    filename = f"{variable}_{YEAR}_{MONTH:02d}.geojson"
 
     task = ee.batch.Export.table.toCloudStorage(
         collection=zonal,
-        description=f"{variable}_{year}_{month}",
+        description=f"{variable}_{YEAR}_{MONTH}",
         bucket=os.environ["GCS_BUCKET"],
         fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
         fileFormat="GeoJSON",
     )
     task.start()
-    return task
-
-
-# -----------------------------
-# Run all tasks in batch mode
-# -----------------------------
-def run_all_exports():
-    all_tasks = []
-    count = 0
-
-    for var, spec in DATASETS.items():
-        for y in YEARS:
-            for m in MONTHS:
-
-                task = export_month(y, m, var, spec)
-                all_tasks.append(task)
-                count += 1
-
-                if count % BATCH_SIZE == 0:
-                    print(f"⏳ Waiting for GEE… batch {count} submitted")
-                    time.sleep(20)
-
-    print(f"🎉 All {len(all_tasks)} tasks submitted.")
-    return all_tasks
-
+    print(f"🚀 Submitted: {variable}_{YEAR}_{MONTH}")
 
 # -----------------------------
-# Run script
+# Run exports
 # -----------------------------
 if __name__ == "__main__":
-    print("🚀 Starting GEE exports (batch mode)…")
-    run_all_exports()
+    for var, spec in DATASETS.items():
+        export_month(var, spec)
+
+    print("🎉 All monthly tasks submitted.")
