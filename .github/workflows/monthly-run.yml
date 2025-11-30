@@ -2,7 +2,6 @@ name: Monthly GEE Pipeline
 
 on:
   schedule:
-    # รันทุกวันที่ 2 ของเดือน เวลา 00:00 UTC (07:00 WIB)
     - cron: "0 0 2 * *"
   workflow_dispatch:
 
@@ -11,32 +10,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - uses: actions/checkout@v3
 
-    - name: Setup Python
-      uses: actions/setup-python@v3
+    - uses: actions/setup-python@v3
       with:
         python-version: "3.10"
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
-    - name: Create service-key.json
-      env:
-        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
+    - name: Add service key
       run: |
-        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
+        echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
 
-    - name: DEBUG — Show generated JSON
-      run: |
-        echo "----- JSON START -----"
-        cat gee-pipeline/service-key.json
-        echo "----- JSON END -----"
-
-    - name: Run Export Script (GEE → GCS)
+    - name: Run GEE Export
       env:
         SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
@@ -44,7 +32,7 @@ jobs:
       run: |
         python gee-pipeline/scripts/gee_export_tasks.py
 
-    - name: Download from GCS & Convert to CSV
+    - name: Poll + Download + Convert
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
@@ -54,11 +42,3 @@ jobs:
     - name: Clean Raw Data
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
-
-    - name: Commit Cleaned Data to Repo
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add .
-        git commit -m "Automated monthly update" || echo "No changes to commit"
-        git push
