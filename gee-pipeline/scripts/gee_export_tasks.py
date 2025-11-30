@@ -1,125 +1,60 @@
-# === gee_export_tasks.py ===
-
 import ee
 import json
-import os
-from datetime import datetime, timedelta
+import time
 
-# -----------------------------
-# Load service account
-# -----------------------------
-SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
-KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+ee.Initialize(project="geo-analysis-472713")
 
-with open(KEYFILE, "r") as f:
-    key_data = json.load(f)
+# Load shapefile
+fc = ee.FeatureCollection("projects/geo-analysis-472713/assets/shapefile_provinces")
 
-credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
-ee.Initialize(credentials)
-
-# -----------------------------
-# Load geometry
-# -----------------------------
-TAMBON = ee.FeatureCollection(
-    "projects/geo-analysis-472713/assets/shapefile_provinces"
+# ---- RENAME RAW FIELDS TO STANDARD NAMES ----
+fc = fc.map(lambda f: f
+    .set("province", f.get("Province"))
+    .set("amphoe", f.get("District"))
+    .set("tambon", f.get("Subdistric"))
 )
 
-RAW_OUTPUT = "raw_export"
+# Export settings
+BUCKET = "geo-analysis-472713-bucket"
 
-# -----------------------------
-# Determine month to export
-# -----------------------------
-today = datetime.utcnow().replace(day=1)
-last_month = today - timedelta(days=1)
+START_YEAR = 2020
+END_YEAR = 2025
 
-YEAR = last_month.year
-MONTH = last_month.month
 
-print(f"📆 Exporting YEAR={YEAR}, MONTH={MONTH}")
+def create_monthly_image(year, month):
+    return (ee.ImageCollection("MODIS/061/MOD11A2")
+            .filterDate(f"{year}-{month:02d}-01", f"{year}-{month:02d}-28")
+            .select("LST_Day_1km")
+            .mean()
+            .multiply(0.02)  # scale factor
+            .rename("lst"))
 
-# -----------------------------
-# Dataset configuration
-# -----------------------------
-DATASETS = {
-    "NDVI": {
-        "ic": "MODIS/061/MOD13Q1",
-        "scale": 250,
-        "reducer": ee.Reducer.mean(),
-        "band": "NDVI",
-    },
-    "LST": {
-        "ic": "MODIS/061/MOD11A2",
-        "scale": 1000,
-        "reducer": ee.Reducer.mean(),
-        "band": "LST_Day_1km",
-    },
-    "SoilMoisture": {
-        "ic": "NASA/SMAP/SPL4SMGP/007",
-        "scale": 10000,
-        "reducer": ee.Reducer.mean(),
-        "band": "sm_surface",
-    },
-    "Rainfall": {
-        "ic": "NASA/GPM_L3/IMERG_V07",
-        "scale": 10000,
-        "reducer": ee.Reducer.sum(),
-        "band": "precipitationCal",
-    },
-    "FireCount": {
-        "ic": "MODIS/061/MOD14A1",
-        "scale": 1000,
-        "reducer": ee.Reducer.count(),
-        "band": "FireMask",
-    },
-}
 
-def month_filter(year, month):
-    start = ee.Date.fromYMD(year, month, 1)
-    end = start.advance(1, "month")
-    return start, end
+tasks = []
 
-def export_month(variable, spec):
-    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(YEAR, MONTH))
-    img = ic.select(spec["band"]).mean()
+for year in range(START_YEAR, END_YEAR + 1):
+    for month in range(1, 13):
+        img = create_monthly_image(year, month)
 
-    # 🔥 เพิ่ม set() ใส่ province/amphoe/tambon
-    zonal = img.reduceRegions(
-        collection=TAMBON.map(
-            lambda f: f.set({
-                "province": f.get("Province"),
-                "amphoe": f.get("District"),
-                "tambon": f.get("Subdistric"),
-            })
-        ),
-        reducer=spec["reducer"],
-        scale=spec["scale"],
-    )
+        out_name = f"{year}_{month:02d}.csv"
 
-    zonal = zonal.map(
-        lambda f: f.set({
-            "year": YEAR,
-            "month": MONTH,
-            "variable": variable,
-        })
-    )
+        task = ee.batch.Export.table.toCloudStorage(
+            collection=img.reduceRegions(
+                collection=fc,
+                reducer=ee.Reducer.mean().combine(
+                    reducer2=ee.Reducer.count(),
+                    sharedInputs=True
+                ),
+                scale=1000
+            ),
+            description=f"export_{year}_{month}",
+            bucket=BUCKET,
+            fileNamePrefix=f"raw_export/{out_name}",
+            fileFormat="CSV"
+        )
 
-    filename = f"{variable}_{YEAR}_{MONTH:02d}.geojson"
+        task.start()
+        tasks.append(task)
+        print("Started:", out_name)
 
-    task = ee.batch.Export.table.toCloudStorage(
-        collection=zonal,
-        description=f"{variable}_{YEAR}_{MONTH}",
-        bucket=os.environ["GCS_BUCKET"],
-        fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
-        fileFormat="GeoJSON",
-    )
-    task.start()
-    print(f"🚀 Submitted: {variable}_{YEAR}_{MONTH}")
-
-# -----------------------------
-# Run exports
-# -----------------------------
-if __name__ == "__main__":
-    for var, spec in DATASETS.items():
-        export_month(var, spec)
-
-    print("🎉 All monthly tasks submitted.")
+print("All tasks started.")
