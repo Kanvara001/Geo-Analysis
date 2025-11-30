@@ -1,15 +1,19 @@
 name: Monthly GEE Pipeline
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"
+    # รันทุกวันที่ 2 ของเดือน เวลา 00:00 UTC = 07:00 เวลาไทย
+    - cron: "0 0 2 * *"
+
+  # กดรันเองก็ได้ (manual)
+  workflow_dispatch:
 
 jobs:
   run-gee:
     runs-on: ubuntu-latest
 
     steps:
+
     - name: Checkout repository
       uses: actions/checkout@v3
 
