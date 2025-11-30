@@ -2,29 +2,33 @@ name: Monthly GEE Pipeline
 
 on:
   schedule:
-    - cron: "0 0 2 * *"
+    - cron: "0 0 2 * *"     # รันวันที่ 2 เวลา 00:00 UTC
   workflow_dispatch:
 
 jobs:
   run-gee:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
 
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-    - uses: actions/setup-python@v3
+    - name: Setup Python
+      uses: actions/setup-python@v3
       with:
         python-version: "3.10"
 
     - name: Install dependencies
       run: |
+        pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
-    - name: Add service key
+    - name: Create service key
       run: |
         echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
 
-    - name: Run GEE Export
+    - name: Run monthly GEE Export
       env:
         SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
