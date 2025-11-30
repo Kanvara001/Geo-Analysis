@@ -1,5 +1,6 @@
+# === clean_raw_data.py (FINAL) ===
+
 import pandas as pd
-import numpy as np
 import glob
 import os
 
@@ -9,39 +10,43 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 def load_all():
     files = glob.glob(f"{RAW_DIR}/*.parquet")
-    if len(files) == 0:
-        print("⚠ No parquet files found. Skipping clean step.")
+    if not files:
+        print("⚠ No raw parquet found.")
         return None
-    dfs = [pd.read_parquet(f) for f in files]
-    return pd.concat(dfs, ignore_index=True)
+    return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
 
 df = load_all()
 if df is None:
     exit(0)
 
-df["value"] = pd.to_numeric(df["mean"], errors="ignore").fillna(
-    pd.to_numeric(df["count"], errors="ignore")
+needed_cols = ["province", "amphoe", "tambon", "year", "month", "variable"]
+
+missing = [c for c in needed_cols if c not in df.columns]
+if missing:
+    print("❌ Missing columns in raw data:", missing)
+    print("⚠ Your GEE export is missing properties. Fix gee_export_tasks.py")
+    exit(1)
+
+df["value"] = (
+    pd.to_numeric(df.get("mean"), errors="coerce")
+    .fillna(pd.to_numeric(df.get("count"), errors="coerce"))
 )
 
 df = df.dropna(subset=["value"])
 
-LONG_GAP = {"NDVI": 2, "LST": 2, "SoilMoisture": 1}
-
 out_list = []
-for var, th in LONG_GAP.items():
 
-    tmp = df[df["variable"] == var].copy()
-    tmp = tmp.sort_values(["province","amphoe","tambon","year","month"])
+for var in df["variable"].unique():
+    t = df[df["variable"] == var].copy()
+    t = t.sort_values(["province", "amphoe", "tambon", "year", "month"])
 
-    def filler(g):
-        s = g["value"]
-        if s.isna().sum() >= th:
-            return s.fillna(s.mean())
-        return s.interpolate().fillna(method="bfill").fillna(method="ffill")
+    t["clean_value"] = t["value"].groupby(
+        [t["province"], t["amphoe"], t["tambon"]]
+    ).transform(lambda s: s.interpolate().bfill().ffill())
 
-    tmp["clean_value"] = tmp.groupby(["province","amphoe","tambon"])["value"].transform(filler)
-    out_list.append(tmp)
+    out_list.append(t)
 
 out = pd.concat(out_list)
 out.to_csv(f"{OUT_DIR}/cleaned_combined.csv", index=False)
+
 print("✔ Clean complete → cleaned_combined.csv")
