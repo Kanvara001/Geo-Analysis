@@ -21,12 +21,22 @@ def list_all_geojson():
     return [b for b in blobs if b.name.endswith(".geojson")]
 
 def download_and_convert(blob):
-    local_geojson = f"/tmp/{os.path.basename(blob.name)}"
+    # ---- FIX #1: ให้ basename ถูกต้องเสมอ ----
+    file_name = os.path.basename(blob.name)
+
+    # ---- FIX #2: ไม่มีการซ้อน .geojson.geojson ----
+    if file_name.endswith(".geojson"):
+        base = file_name[:-8]   # ตัด ".geojson"
+    else:
+        raise ValueError(f"Unexpected file extension: {file_name}")
+
+    local_geojson = f"/tmp/{file_name}"
     local_parquet = os.path.join(
         OUT_DIR,
-        os.path.basename(blob.name).replace(".geojson", ".parquet")
+        f"{base}.parquet"
     )
 
+    print(f"⬇ Downloading {blob.name}")
     blob.download_to_filename(local_geojson)
 
     gdf = gpd.read_file(local_geojson)
