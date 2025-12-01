@@ -1,96 +1,115 @@
-import os
+#!/usr/bin/env python3
 import ee
-from datetime import datetime
-import time
+import os
+from datetime import datetime, timedelta
 
-SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
-CREDENTIALS = "gee-pipeline/service-key.json"
-BUCKET = os.environ["GCS_BUCKET"]
+# -----------------------------------------------------------
+# 1) อ่าน Environment Variables (จาก GitHub Actions)
+# -----------------------------------------------------------
+SERVICE_ACCOUNT = os.getenv("SERVICE_ACCOUNT")
+GCS_BUCKET = os.getenv("GCS_BUCKET")
+KEY_FILE = "gee-pipeline/service-key.json"
 
-# Authenticate
-credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, CREDENTIALS)
-ee.Initialize(credentials)
-print("Initialized Earth Engine with service account.")
+if not SERVICE_ACCOUNT:
+    raise SystemExit("❌ ERROR: SERVICE_ACCOUNT environment variable missing.")
+if not GCS_BUCKET:
+    raise SystemExit("❌ ERROR: GCS_BUCKET missing.")
 
-# -------------------------------------------------------------------
-# Date parameters
-# -------------------------------------------------------------------
-now = datetime.utcnow()
-YEAR = now.year
-MONTH = now.month
+# -----------------------------------------------------------
+# 2) Initialize Earth Engine ด้วย Service Account
+# -----------------------------------------------------------
+credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_FILE)
+ee.Initialize(credentials=credentials)
+print("✔ Initialized Earth Engine with service account.")
 
-# -------------------------------------------------------------------
-# Load administrative boundary (Thailand)
-# -------------------------------------------------------------------
-shp = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level2") \
-        .filter(ee.Filter.eq("ADM0_NAME", "Thailand"))
+# -----------------------------------------------------------
+# 3) กำหนดวันที่แบบเดือนล่าสุด
+# -----------------------------------------------------------
+today = datetime.utcnow()
+first_day = today.replace(day=1)
+last_month_end = first_day - timedelta(days=1)
+last_month_start = last_month_end.replace(day=1)
 
-# -------------------------------------------------------------------
-# VARIABLES
-# -------------------------------------------------------------------
+START = last_month_start.strftime("%Y-%m-%d")
+END   = last_month_end.strftime("%Y-%m-%d")
+YEAR  = last_month_start.year
+MONTH = last_month_start.month
 
-def get_ndvi():
-    collection = ee.ImageCollection("MODIS/061/MOD13A2") \
-        .filterDate(f"{YEAR}-{MONTH:02d}-01",
-                    f"{YEAR}-{MONTH:02d}-28") \
-        .select("NDVI")
-    return collection.mean().rename("NDVI")
+print(f"🗓 Exporting month: {YEAR}-{MONTH:02d}")
 
-def get_lst():
-    collection = ee.ImageCollection("MODIS/061/MOD11A2") \
-        .filterDate(f"{YEAR}-{MONTH:02d}-01",
-                    f"{YEAR}-{MONTH:02d}-28") \
-        .select("LST_Day_1km")
-    return collection.mean().rename("LST")
-
-def get_rainfall():
-    collection = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY") \
-        .filterDate(f"{YEAR}-{MONTH:02d}-01",
-                    f"{YEAR}-{MONTH:02d}-28")
-    return collection.mean().rename("Rainfall")
-
-def get_soil_moisture():
-    collection = ee.ImageCollection("NASA/SMAP/SPL4SMGP/007") \
-        .filterDate(f"{YEAR}-{MONTH:02d}-01",
-                    f"{YEAR}-{MONTH:02d}-28") \
-        .select("sm_surface")
-    return collection.mean().rename("SoilMoisture")
-
-def get_firecount():
-    collection = ee.ImageCollection("MODIS/061/MCD14DL") \
-        .filterDate(f"{YEAR}-{MONTH:02d}-01",
-                    f"{YEAR}-{MONTH:02d}-28") \
-        .select("FireMask")
-    return collection.count().rename("FireCount")
-
-VARIABLES = {
-    "NDVI": get_ndvi(),
-    "LST": get_lst(),
-    "Rainfall": get_rainfall(),
-    "SoilMoisture": get_soil_moisture(),
-    "FireCount": get_firecount(),
-}
-
-# -------------------------------------------------------------------
-# Export each variable as GeoTIFF
-# -------------------------------------------------------------------
-def export_tif(img, name):
-    out_name = f"{name}/{name}_{YEAR}_{MONTH:02d}.tif"
+# -----------------------------------------------------------
+# 4) ฟังก์ชัน export TIFF → GCS
+# -----------------------------------------------------------
+def export_tif(image, folder, filename):
+    """Export TIFF from EE image to GCS."""
     task = ee.batch.Export.image.toCloudStorage(
-        image=img,
-        description=f"{name}_{YEAR}_{MONTH:02d}",
-        bucket=BUCKET,
-        fileNamePrefix=f"raw_export/{out_name}",
-        region=shp.geometry(),
-        scale=500,
+        image=image,
+        description=f"{folder}-{filename}",
+        bucket=GCS_BUCKET,
+        fileNamePrefix=f"raw_export/{folder}/{filename}",
+        region=image.geometry(),
+        scale=1000,
         maxPixels=1e13,
-        fileFormat="GeoTIFF"       # ←♫แก้ตรงนี้สำคัญมาก
+        fileFormat="GeoTIFF"
     )
     task.start()
-    print("Started:", out_name)
+    print(f"▶ Started export: {folder}/{filename}")
 
+# -----------------------------------------------------------
+# 5) Loading Datasets (แบบถูกต้อง)
+# -----------------------------------------------------------
 
-# Start all exports
-for name, img in VARIABLES.items():
-    export_tif(img, name)
-    time.sleep(2)
+# 🌿 NDVI (MODIS MOD13Q1 500m)
+NDVI = (
+    ee.ImageCollection("MODIS/061/MOD13Q1")
+    .filterDate(START, END)
+    .select("NDVI")
+    .mean()
+)
+
+# 🌡 LST (MODIS MOD11A2)
+LST = (
+    ee.ImageCollection("MODIS/061/MOD11A2")
+    .filterDate(START, END)
+    .select("LST_Day_1km")
+    .mean()
+)
+
+# 🌧 Rainfall (CHIRPS Daily)
+Rain = (
+    ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+    .filterDate(START, END)
+    .select("precipitation")
+    .sum()
+)
+
+# 💧 Soil Moisture (SMAP v008 — ใหม่ล่าสุด)
+SM = (
+    ee.ImageCollection("NASA/SMAP/SPL4SMGP/008")
+    .filterDate(START, END)
+    .select("sm_surface")
+    .mean()
+)
+
+# 🔥 Fire Count (MODIS MCD14DL — FeatureCollection → raster)
+FireFC = (
+    ee.FeatureCollection("MODIS/061/MCD14DL")
+    .filter(ee.Filter.date(START, END))
+)
+
+# แปลง point → raster นับจำนวนไฟ
+FireRaster = FireFC.reduceToImage(
+    properties=["brightness"],          # ใช้ field ที่มีแน่นอน
+    reducer=ee.Reducer.count()
+)
+
+# -----------------------------------------------------------
+# 6) Export ทุกตัวเป็น TIFF
+# -----------------------------------------------------------
+export_tif(NDVI, "NDVI", f"NDVI_{YEAR}_{MONTH:02d}.tif")
+export_tif(LST,  "LST", f"LST_{YEAR}_{MONTH:02d}.tif")
+export_tif(Rain, "Rainfall", f"Rainfall_{YEAR}_{MONTH:02d}.tif")
+export_tif(SM,   "SoilMoisture", f"SoilMoisture_{YEAR}_{MONTH:02d}.tif")
+export_tif(FireRaster, "FireCount", f"FireCount_{YEAR}_{MONTH:02d}.tif")
+
+print("🎉 All export tasks started successfully!")
