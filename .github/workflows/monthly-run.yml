@@ -1,86 +1,118 @@
+# ===============================
+#  Monthly GEE Pipeline Workflow
+#  ทำงานทุกวันที่ 2 ของเดือน
+#  อัปเดตข้อมูล GEE → GCS → Repo
+# ===============================
+
 name: Monthly GEE Pipeline
 
 on:
   schedule:
+    # รันทุกวันที่ 2 เวลา 00:00 UTC (07:00 ไทย)
     - cron: "0 0 2 * *"
+  # อนุญาตให้รันเองแบบ manual
   workflow_dispatch:
 
 jobs:
   run-gee:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest   # รัน workflow บน Ubuntu VM
 
     steps:
+    # -----------------------------
+    # 1) โหลดโค้ดจาก GitHub Repo
+    # -----------------------------
     - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        lfs: false
-        fetch-depth: 0
+      uses: actions/checkout@v3
 
+    # -----------------------------
+    # 2) ติดตั้ง Python
+    # -----------------------------
     - name: Setup Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v3
       with:
         python-version: "3.10"
 
-    - name: Install system dependencies
+    # -----------------------------
+    # 3) ติดตั้งระบบ GDAL ที่จำเป็นสำหรับ GeoPandas
+    # -----------------------------
+    - name: Install system dependencies for GeoPandas
       run: |
         sudo apt-get update
         sudo apt-get install -y gdal-bin libgdal-dev libspatialindex-dev
+        export CPLUS_INCLUDE_PATH=/usr/include/gdal
+        export C_INCLUDE_PATH=/usr/include/gdal
 
+    # -----------------------------
+    # 4) ติดตั้ง Python libraries ใน requirements.txt
+    # -----------------------------
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
+    # -----------------------------
+    # 5) สร้าง service-key.json จาก GitHub Secret
+    # -----------------------------
     - name: Create service-key.json
       env:
-        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
+        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}   # อ่านค่า secret
       run: |
-        echo "$SERVICE_KEY_JSON" > service-key.json
+        # เขียนเนื้อ JSON ลงไฟล์
+        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    # ----------------------------------------
-    # 1) Run GEE Export Tasks
-    # ----------------------------------------
+    # -----------------------------
+    # 6) Debug ไฟล์ service-key.json
+    # -----------------------------
+    - name: DEBUG — Show generated JSON
+      run: |
+        echo "----- JSON START -----"
+        cat gee-pipeline/service-key.json
+        echo "----- JSON END -----"
+
+    # -----------------------------
+    # 7) รันสคริปต์ส่งคำสั่ง Export จาก GEE → GCS
+    # -----------------------------
     - name: Run Export Script (GEE → GCS)
       env:
         SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-        GOOGLE_APPLICATION_CREDENTIALS: service-key.json
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
       run: |
         python gee-pipeline/scripts/gee_export_tasks.py
 
-    # ----------------------------------------
-    # 2) Convert GeoJSON → Parquet + Upload to GCS
-    # ----------------------------------------
-    - name: Download from GCS & Convert
+    # -----------------------------
+    # 8) ดึงไฟล์จาก GCS → แปลงเป็น Parquet
+    # -----------------------------
+    - name: Download from GCS & Convert to Parquet
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: service-key.json
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
         python gee-pipeline/scripts/poll_download_convert.py
 
-    # ----------------------------------------
-    # 3) Clean raw data (CSV from parquet)
-    # ----------------------------------------
+    # -----------------------------
+    # 9) Clean ข้อมูล Parquet → CSV รวม
+    # -----------------------------
     - name: Clean Raw Data
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
-    # ----------------------------------------
-    # 4) Create Pull Request (ไม่ต้อง push ตรง)
-    # ----------------------------------------
+    # -----------------------------
+    # 10) สร้าง Pull Request (ไม่ push ตรง)
+    #     ป้องกันปัญหา Git push error
+    # -----------------------------
     - name: Create Pull Request
       uses: peter-evans/create-pull-request@v6
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: "Monthly update: $(date)"
-        branch: monthly-update
-        delete-branch: true
+        branch: "monthly-update"             # ชื่อ branch ที่ใช้ทุกเดือน
+        delete-branch: true                 # ลบ branch เก่าหลัง merge
         title: "Monthly GEE Update — $(date)"
         body: |
           ระบบอัปเดตข้อมูลรายเดือนเสร็จสมบูรณ์ ✔  
           กรุณาตรวจสอบไฟล์ก่อน merge  
-        labels: |
-          automated
-          monthly
-        add-paths: |
-          gee-pipeline/processed/monthly_clean.csv
+
+        labels: automated, monthly          # label PR
+        token: ${{ secrets.GITHUB_TOKEN }}  # ใช้ token ของ GitHub Actions
+        committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+        author: Kanvara001 <173020456+Kanvara001@users.noreply.github.com>
