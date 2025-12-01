@@ -2,7 +2,7 @@ name: Monthly GEE Pipeline
 
 on:
   schedule:
-    - cron: "0 0 2 * *"   # ทุกวันที่ 2 เวลา 00:00 UTC
+    - cron: "0 0 2 * *"
   workflow_dispatch:
 
 jobs:
@@ -11,19 +11,20 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+      with:
+        lfs: false
+        fetch-depth: 0
 
     - name: Setup Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: "3.10"
 
-    - name: Install system dependencies for GeoPandas
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y gdal-bin libgdal-dev libspatialindex-dev
-        export CPLUS_INCLUDE_PATH=/usr/include/gdal
-        export C_INCLUDE_PATH=/usr/include/gdal
 
     - name: Install Python dependencies
       run: |
@@ -34,33 +35,43 @@ jobs:
       env:
         SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
       run: |
-        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
+        echo "$SERVICE_KEY_JSON" > service-key.json
 
+    # ----------------------------------------
+    # 1) Run GEE Export Tasks
+    # ----------------------------------------
     - name: Run Export Script (GEE → GCS)
       env:
         SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        GOOGLE_APPLICATION_CREDENTIALS: service-key.json
       run: |
         python gee-pipeline/scripts/gee_export_tasks.py
 
-    - name: Download from GCS & Convert to Parquet
+    # ----------------------------------------
+    # 2) Convert GeoJSON → Parquet + Upload to GCS
+    # ----------------------------------------
+    - name: Download from GCS & Convert
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        GOOGLE_APPLICATION_CREDENTIALS: service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
         python gee-pipeline/scripts/poll_download_convert.py
 
+    # ----------------------------------------
+    # 3) Clean raw data (CSV from parquet)
+    # ----------------------------------------
     - name: Clean Raw Data
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
-    # ---------------------------------------------------------
-    # 🔥 Create Pull Request (ไม่ push main ตรงๆ)
-    # ---------------------------------------------------------
+    # ----------------------------------------
+    # 4) Create Pull Request (ไม่ต้อง push ตรง)
+    # ----------------------------------------
     - name: Create Pull Request
       uses: peter-evans/create-pull-request@v6
       with:
+        token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: "Monthly update: $(date)"
         branch: monthly-update
         delete-branch: true
@@ -68,7 +79,8 @@ jobs:
         body: |
           ระบบอัปเดตข้อมูลรายเดือนเสร็จสมบูรณ์ ✔  
           กรุณาตรวจสอบไฟล์ก่อน merge  
-
         labels: |
           automated
           monthly
+        add-paths: |
+          gee-pipeline/processed/monthly_clean.csv
