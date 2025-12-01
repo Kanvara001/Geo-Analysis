@@ -1,8 +1,8 @@
 import os
+import json
 import time
 from google.cloud import storage
 import geopandas as gpd
-from google.api_core.exceptions import NotFound
 
 BUCKET = os.environ["GCS_BUCKET"]
 RAW_PREFIX = "raw_export"
@@ -16,44 +16,26 @@ storage_client = storage.Client.from_service_account_json(
 
 bucket = storage_client.bucket(BUCKET)
 
-def list_geojson():
-    blobs = bucket.list_blobs(prefix=RAW_PREFIX)
-    return [b for b in blobs if ".geojson" in b.name]
+def list_all_geojson():
+    return [
+        b for b in bucket.list_blobs(prefix=RAW_PREFIX)
+        if b.name.endswith(".geojson")
+    ]
 
-def possible_names(blob_name):
-    """Generate possible file names for broken GEE exports."""
-    names = [blob_name]
+def download_and_convert(blob):
+    local_geojson = f"/tmp/{os.path.basename(blob.name)}"
 
-    # Case: NDVI_2025_11.geojson.geojson -> NDVI_2025_11.geojson
-    if blob_name.endswith(".geojson.geojson"):
-        names.append(blob_name[:-8])  # remove last ".geojson"
+    parquet_name = os.path.basename(blob.name).replace(".geojson", ".parquet")
+    local_parquet = os.path.join(OUT_DIR, parquet_name)
 
-    return names
+    print(f"⬇ Downloading: {blob.name}")
+    blob.reload()
 
-def download_with_fallback(blob):
-    """Try to download using multiple possible names."""
-    tried = []
+    if not blob.size:
+        print(f"⚠ Skip empty object: {blob.name}")
+        return
 
-    for name in possible_names(blob.name):
-        try:
-            clean_local_name = os.path.basename(name)
-            local_geojson = f"/tmp/{clean_local_name}"
-
-            bucket.blob(name).download_to_filename(local_geojson)
-
-            print(f"✔ Downloaded: {name}")
-            return local_geojson
-
-        except NotFound:
-            tried.append(name)
-            continue
-
-    print("❌ All download attempts failed:", tried)
-    raise NotFound("File not found in bucket.")
-
-def convert_to_parquet(local_geojson):
-    filename = os.path.basename(local_geojson).replace(".geojson", ".parquet")
-    local_parquet = os.path.join(OUT_DIR, filename)
+    blob.download_to_filename(local_geojson)
 
     gdf = gpd.read_file(local_geojson)
     gdf.to_parquet(local_parquet)
@@ -63,16 +45,19 @@ def convert_to_parquet(local_geojson):
 def main():
     print("🔍 Checking bucket…")
 
-    files = list_geojson()
-    if not files:
-        print("⏳ No files found in bucket.")
-        return
+    while True:
+        files = list_all_geojson()
 
-    for blob in files:
-        local_gj = download_with_fallback(blob)
-        convert_to_parquet(local_gj)
+        if len(files) == 0:
+            print("⏳ No files yet. Waiting 30 sec…")
+            time.sleep(30)
+            continue
 
-    print("🎉 All files processed successfully.")
+        for blob in files:
+            download_and_convert(blob)
+
+        print("🎉 Completed.")
+        break
 
 if __name__ == "__main__":
     main()
