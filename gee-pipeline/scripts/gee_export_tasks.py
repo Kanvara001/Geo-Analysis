@@ -1,100 +1,96 @@
+import os
 import ee
-import datetime
+from datetime import datetime
 import time
 
-# ------------------------------
-# 1) INITIALIZE SERVICE ACCOUNT
-# ------------------------------
-SERVICE_ACCOUNT = "YOUR_SERVICE_ACCOUNT@project.iam.gserviceaccount.com"
-KEY_FILE = "gee-pipeline/service-key.json"
+SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT_EMAIL"]
+CREDENTIALS = "gee-pipeline/service-key.json"
+BUCKET = os.environ["GCS_BUCKET"]
 
-credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_FILE)
+# Authenticate
+credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, CREDENTIALS)
 ee.Initialize(credentials)
 print("Initialized Earth Engine with service account.")
 
+# -------------------------------------------------------------------
+# Date parameters
+# -------------------------------------------------------------------
+now = datetime.utcnow()
+YEAR = now.year
+MONTH = now.month
 
-# ------------------------------
-# 2) TIME RANGE (monthly)
-# ------------------------------
-now = datetime.datetime.utcnow()
-year = now.year
-month = now.month
+# -------------------------------------------------------------------
+# Load administrative boundary (Thailand)
+# -------------------------------------------------------------------
+shp = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level2") \
+        .filter(ee.Filter.eq("ADM0_NAME", "Thailand"))
 
-start_date = f"{year}-{month:02d}-01"
-end_date = f"{year}-{month:02d}-28"  # safe end
+# -------------------------------------------------------------------
+# VARIABLES
+# -------------------------------------------------------------------
 
+def get_ndvi():
+    collection = ee.ImageCollection("MODIS/061/MOD13A2") \
+        .filterDate(f"{YEAR}-{MONTH:02d}-01",
+                    f"{YEAR}-{MONTH:02d}-28") \
+        .select("NDVI")
+    return collection.mean().rename("NDVI")
 
-# ------------------------------
-# 3) COUNTRY SHAPE (Thailand)
-# ------------------------------
-th = ee.FeatureCollection("FAO/GAUL/2015/level0") \
-        .filter(ee.Filter.eq("ADM0_NAME", "Thailand")) \
-        .geometry()
+def get_lst():
+    collection = ee.ImageCollection("MODIS/061/MOD11A2") \
+        .filterDate(f"{YEAR}-{MONTH:02d}-01",
+                    f"{YEAR}-{MONTH:02d}-28") \
+        .select("LST_Day_1km")
+    return collection.mean().rename("LST")
 
+def get_rainfall():
+    collection = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY") \
+        .filterDate(f"{YEAR}-{MONTH:02d}-01",
+                    f"{YEAR}-{MONTH:02d}-28")
+    return collection.mean().rename("Rainfall")
 
-# ------------------------------
-# 4) DEFINE DATASETS
-# ------------------------------
+def get_soil_moisture():
+    collection = ee.ImageCollection("NASA/SMAP/SPL4SMGP/007") \
+        .filterDate(f"{YEAR}-{MONTH:02d}-01",
+                    f"{YEAR}-{MONTH:02d}-28") \
+        .select("sm_surface")
+    return collection.mean().rename("SoilMoisture")
 
-def get_firecount(start, end):
-    col = ee.ImageCollection("FIRMS").filterDate(start, end).filterBounds(th)
-    return col.count().rename("fire_count")
+def get_firecount():
+    collection = ee.ImageCollection("MODIS/061/MCD14DL") \
+        .filterDate(f"{YEAR}-{MONTH:02d}-01",
+                    f"{YEAR}-{MONTH:02d}-28") \
+        .select("FireMask")
+    return collection.count().rename("FireCount")
 
-def get_ndvi(start, end):
-    col = ee.ImageCollection("MODIS/061/MOD13Q1").filterDate(start, end)
-    img = col.mean()
-    return img.select("NDVI").rename("ndvi")
-
-def get_lst(start, end):
-    col = ee.ImageCollection("MODIS/061/MOD11A1").filterDate(start, end)
-    img = col.mean()
-    lst = img.select("LST_Day_1km").multiply(0.02).subtract(273.15)
-    return lst.rename("lst")
-
-def get_soilmoisture(start, end):
-    col = ee.ImageCollection("NASA_USDA/HSL/SMAP10KM_soil_moisture").filterDate(start, end)
-    return col.mean().select("ssm").rename("soil_moisture")
-
-def get_rainfall(start, end):
-    col = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY").filterDate(start, end)
-    return col.sum().rename("rainfall")
-
-
-# ------------------------------
-# 5) TASK EXPORT FUNCTION
-# ------------------------------
-def export_image(image, var_name):
-    file_name = f"{var_name}_{year}_{month:02d}"
-
-    task = ee.batch.Export.image.toCloudStorage(
-        image=image,
-        description=file_name,
-        bucket="YOUR_BUCKET_NAME",
-        fileNamePrefix=f"raw_export/{var_name}/{file_name}",
-        region=th,
-        scale=1000,
-        maxPixels=1e13,
-        fileFormat="GeoJSON"
-    )
-
-    task.start()
-    print(f"🚀 Started export for {var_name}")
-
-    time.sleep(2)
-
-
-# ------------------------------
-# 6) EXECUTE ALL EXPORTS
-# ------------------------------
-datasets = {
-    "FireCount": get_firecount(start_date, end_date),
-    "NDVI": get_ndvi(start_date, end_date),
-    "LST": get_lst(start_date, end_date),
-    "SoilMoisture": get_soilmoisture(start_date, end_date),
-    "Rainfall": get_rainfall(start_date, end_date),
+VARIABLES = {
+    "NDVI": get_ndvi(),
+    "LST": get_lst(),
+    "Rainfall": get_rainfall(),
+    "SoilMoisture": get_soil_moisture(),
+    "FireCount": get_firecount(),
 }
 
-for var, img in datasets.items():
-    export_image(img, var)
+# -------------------------------------------------------------------
+# Export each variable as GeoTIFF
+# -------------------------------------------------------------------
+def export_tif(img, name):
+    out_name = f"{name}/{name}_{YEAR}_{MONTH:02d}.tif"
+    task = ee.batch.Export.image.toCloudStorage(
+        image=img,
+        description=f"{name}_{YEAR}_{MONTH:02d}",
+        bucket=BUCKET,
+        fileNamePrefix=f"raw_export/{out_name}",
+        region=shp.geometry(),
+        scale=500,
+        maxPixels=1e13,
+        fileFormat="GeoTIFF"       # ←♫แก้ตรงนี้สำคัญมาก
+    )
+    task.start()
+    print("Started:", out_name)
 
-print("🎉 All export tasks started successfully!")
+
+# Start all exports
+for name, img in VARIABLES.items():
+    export_tif(img, name)
+    time.sleep(2)
