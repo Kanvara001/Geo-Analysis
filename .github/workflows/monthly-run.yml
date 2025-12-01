@@ -1,88 +1,92 @@
-name: Monthly GEE Data Pipeline
+name: Monthly GEE Pipeline
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"   # Run monthly on the 1st
+    # รันวันที่ 2 เวลา 00:00 UTC (07:00 เวลาไทย)
+    - cron: "0 0 2 * *"
+  workflow_dispatch:
 
 jobs:
-  pipeline:
+  run-gee:
     runs-on: ubuntu-latest
 
     steps:
-      # -----------------------------
-      # 1) Checkout repo
-      # -----------------------------
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      # -----------------------------
-      # 2) Setup Python
-      # -----------------------------
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    - name: Setup Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
 
-      # -----------------------------
-      # 3) Install dependencies
-      # -----------------------------
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r gee-pipeline/requirements.txt
+    # -----------------------------
+    # Install GDAL + SpatialIndex (จำเป็นสำหรับ GeoPandas)
+    # -----------------------------
+    - name: Install system dependencies for GeoPandas
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gdal-bin libgdal-dev libspatialindex-dev
+        export CPLUS_INCLUDE_PATH=/usr/include/gdal
+        export C_INCLUDE_PATH=/usr/include/gdal
 
-      # -----------------------------
-      # 4) Authenticate Google Cloud
-      # -----------------------------
-      - name: Google Cloud Auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SERVICE_KEY }}
+    # -----------------------------
+    # Python Dependencies
+    # -----------------------------
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r gee-pipeline/requirements.txt
 
-      # -----------------------------
-      # 5) Auto-clean bucket BEFORE exporting new data
-      # -----------------------------
-      - name: Auto-clean GCS bucket
-        run: |
-          echo "🧹 Cleaning old files in bucket..."
-          gsutil -m rm -r gs://${{ secrets.GCS_BUCKET }}/raw_export/** || true
-          gsutil -m rm -r gs://${{ secrets.GCS_BUCKET }}/archive/** || true
-        shell: bash
+    # -----------------------------
+    # Write service-key.json
+    # -----------------------------
+    - name: Create service-key.json
+      env:
+        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
+      run: |
+        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-      # -----------------------------
-      # 6) Run GEE Export Tasks
-      # -----------------------------
-      - name: Run export from GEE
-        run: python gee-pipeline/scripts/gee_export_tasks.py
+    - name: DEBUG — Show generated JSON
+      run: |
+        echo "----- JSON START -----"
+        cat gee-pipeline/service-key.json
+        echo "----- JSON END -----"
 
-      # -----------------------------
-      # 7) Poll + Download + Convert
-      # -----------------------------
-      - name: Poll, download, convert
-        run: python gee-pipeline/scripts/poll_download_convert.py
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    # -----------------------------
+    # Run GEE export to GCS
+    # -----------------------------
+    - name: Run Export Script (GEE → GCS)
+      env:
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+      run: |
+        python gee-pipeline/scripts/gee_export_tasks.py
 
-      # -----------------------------
-      # 8) Clean & Merge Data
-      # -----------------------------
-      - name: Clean & merge
-        run: python gee-pipeline/scripts/clean_raw_data.py
+    # -----------------------------
+    # Download from GCS → Parquet
+    # -----------------------------
+    - name: Download from GCS & Convert to Parquet
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+      run: |
+        python gee-pipeline/scripts/poll_download_convert.py
 
-      # -----------------------------
-      # 9) Create Pull Request
-      # -----------------------------
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          commit-message: Monthly update: $(date)
-          branch: monthly-update
-          delete-branch: true
-          title: Monthly GEE Update — $(date)
-          body: |
-            ระบบอัปเดตข้อมูลรายเดือนเสร็จสมบูรณ์ ✔  
-            กรุณาตรวจสอบไฟล์ก่อน merge  
-          labels: automated, monthly
-          token: ${{ secrets.GITHUB_TOKEN }}
+    # -----------------------------
+    # Clean Raw Data
+    # -----------------------------
+    - name: Clean Raw Data
+      run: |
+        python gee-pipeline/scripts/clean_raw_data.py
+
+    # -----------------------------
+    # Commit clean data back to repo
+    # -----------------------------
+    - name: Commit Cleaned Data to Repo
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add .
+        git commit -m "Automated monthly update" || echo "No changes to commit"
+        git push
