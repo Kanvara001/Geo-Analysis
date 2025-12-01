@@ -1,94 +1,92 @@
-name: Monthly GEE Data Pipeline
+name: Monthly Update
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 1 * *"   # Run on 1st of each month
+    - cron: "0 0 1 * *"
 
 jobs:
-  run-pipeline:
+  run-monthly:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------------
-    # 1) Checkout Repo
-    # --------------------------
-    - name: Checkout repository
-      uses: actions/checkout@v4
 
-    # --------------------------
-    # 2) Setup Python
-    # --------------------------
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
+      # ------------------------------------------------------------
+      # 1) Checkout repo
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        pip install -r gee-pipeline/requirements.txt
+      # ------------------------------------------------------------
+      # 2) Authenticate with Google Cloud using service-key.json
+      # ------------------------------------------------------------
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # --------------------------
-    # 3) Activate Google Auth
-    # --------------------------
-    - name: Set up Google Cloud authentication
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+      # ------------------------------------------------------------
+      # 3) Install gcloud
+      # ------------------------------------------------------------
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-    - name: Install gcloud SDK
-      uses: google-github-actions/setup-gcloud@v2
+      # ------------------------------------------------------------
+      # 4) Auto-clean bucket BEFORE running new export
+      # ------------------------------------------------------------
+      - name: Auto-clean old raw_export from GCS
+        run: |
+          echo "🧹 Cleaning GCS bucket old files..."
+          gsutil -m rm -r gs://${{ secrets.GCS_BUCKET }}/raw_export/** || true
+          gsutil -m rm -r gs://${{ secrets.GCS_BUCKET }}/archive/** || true
+          echo "✔ Cleanup completed"
 
-    # --------------------------
-    # 4) 🧹 Auto-Clean Bucket ก่อนเริ่มรอบใหม่
-    # --------------------------
-    - name: Auto-clean raw_export in bucket
-      run: |
-        echo "🔍 Checking & cleaning bucket: ${{ secrets.GCS_BUCKET }}"
-        gsutil -m rm -f gs://${{ secrets.GCS_BUCKET }}/raw_export/** || true
-        echo "✔ Bucket cleaned successfully."
+      # ------------------------------------------------------------
+      # 5) Set up Python
+      # ------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
-    # --------------------------
-    # 5) สร้าง GEE Export Tasks (firecount/lst/ndvi/rain/soil)
-    # --------------------------
-    - name: Run GEE export tasks
-      run: |
-        python gee-pipeline/scripts/gee_export_tasks.py
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+      # ------------------------------------------------------------
+      # 6) Install Python dependencies
+      # ------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
 
-    # --------------------------
-    # 6) Poll + Download + Convert (geojson → Parquet)
-    # --------------------------
-    - name: Poll, download & convert
-      run: |
-        python gee-pipeline/scripts/poll_download_convert.py
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+      # ------------------------------------------------------------
+      # 7) Run GEE export tasks
+      # ------------------------------------------------------------
+      - name: Run GEE export tasks
+        run: python gee-pipeline/scripts/gee_export_tasks.py
 
-    # --------------------------
-    # 7) Clean raw data → monthly_clean.csv
-    # --------------------------
-    - name: Clean raw exported data
-      run: |
-        python gee-pipeline/scripts/clean_raw_data.py
+      # ------------------------------------------------------------
+      # 8) Poll, download, convert to Parquet
+      # ------------------------------------------------------------
+      - name: Poll & download GCS → parquet
+        env:
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+          GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        run: python gee-pipeline/scripts/poll_download_convert.py
 
-    # --------------------------
-    # 8) Create Pull Request
-    # --------------------------
-    - name: Create Pull Request
-      uses: peter-evans/create-pull-request@v6
-      with:
-        commit-message: "Monthly update: $(date)"
-        branch: monthly-update
-        delete-branch: true
-        title: "Monthly GEE Update — $(date)"
-        body: |
-          ระบบอัปเดตข้อมูลรายเดือนเสร็จสมบูรณ์ ✔  
-          กรุณาตรวจสอบไฟล์ก่อน merge  
-        labels: automated, monthly
-        token: ${{ secrets.GITHUB_TOKEN }}
-        committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-        author: Kanvara001 <173020456+Kanvara001@users.noreply.github.com>
+      # ------------------------------------------------------------
+      # 9) Clean raw data & merge
+      # ------------------------------------------------------------
+      - name: Clean raw data
+        run: python gee-pipeline/scripts/clean_raw_data.py
+
+      # ------------------------------------------------------------
+      # 10) Create Pull Request with updated files
+      # ------------------------------------------------------------
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: Monthly update: $(date)
+          title: Monthly GEE Update — $(date)
+          body: ระบบอัปเดตข้อมูลรายเดือนเสร็จสมบูรณ์ ✔ \
+                กรุณาตรวจสอบไฟล์ก่อน merge
+          labels: automated, monthly
+          branch: monthly-update
+          delete-branch: true
