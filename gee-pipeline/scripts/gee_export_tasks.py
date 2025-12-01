@@ -83,13 +83,18 @@ def export_month(variable, spec):
         scale=spec["scale"],
     )
 
-    zonal = zonal.map(
-        lambda f: f.set({
+    # ⭐ สำคัญ: map property ชื่อใหม่ให้ตรงกับ clean_raw_data.py
+    def rename_props(f):
+        return f.set({
+            "province": f.get("Province"),
+            "amphoe": f.get("District"),
+            "tambon": f.get("Subdistric"),
             "year": YEAR,
             "month": MONTH,
             "variable": variable,
         })
-    )
+
+    zonal = zonal.map(rename_props)
 
     filename = f"{variable}_{YEAR}_{MONTH:02d}.geojson"
 
@@ -103,6 +108,9 @@ def export_month(variable, spec):
     task.start()
     print(f"🚀 Submitted: {variable}_{YEAR}_{MONTH}")
 
+# -----------------------------
+# Run
+# -----------------------------
 if __name__ == "__main__":
     for var, spec in DATASETS.items():
         export_month(var, spec)
