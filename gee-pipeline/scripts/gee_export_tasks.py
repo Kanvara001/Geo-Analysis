@@ -97,7 +97,7 @@ def export_month(variable, spec):
         collection=zonal,
         description=f"{variable}_{YEAR}_{MONTH}",
         bucket=os.environ["GCS_BUCKET"],
-        fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
+        fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",  # ไม่มี .geojson.geojson แล้ว
         fileFormat="GeoJSON",
     )
     task.start()
