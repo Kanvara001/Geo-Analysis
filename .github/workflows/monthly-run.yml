@@ -1,9 +1,11 @@
 name: Monthly GEE Pipeline
 
+# --------------------------------------------------------
+# Trigger การรันอัตโนมัติ
+# --------------------------------------------------------
 on:
   schedule:
-    # รันวันที่ 2 เวลา 00:00 UTC (07:00 เวลาไทย)
-    - cron: "0 0 2 * *"
+    - cron: "0 0 2 * *"   # รันวันที่ 2 เวลา 00:00 UTC (07:00 ไทย)
   workflow_dispatch:
 
 jobs:
@@ -11,17 +13,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # ----------------------------------------------------
+    # 1) Checkout repo
+    # ----------------------------------------------------
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+      with:
+        lfs: true   # เปิด Git LFS เพื่อรองรับไฟล์ใหญ่
 
+    # ----------------------------------------------------
+    # 2) Setup Python
+    # ----------------------------------------------------
     - name: Setup Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: "3.10"
 
-    # -----------------------------
-    # Install GDAL + SpatialIndex (จำเป็นสำหรับ GeoPandas)
-    # -----------------------------
+    # ----------------------------------------------------
+    # 3) Install GDAL (จำเป็นสำหรับ GeoPandas)
+    # ----------------------------------------------------
     - name: Install system dependencies for GeoPandas
       run: |
         sudo apt-get update
@@ -29,32 +39,36 @@ jobs:
         export CPLUS_INCLUDE_PATH=/usr/include/gdal
         export C_INCLUDE_PATH=/usr/include/gdal
 
-    # -----------------------------
-    # Python Dependencies
-    # -----------------------------
+    # ----------------------------------------------------
+    # 4) Install Python dependencies
+    # ----------------------------------------------------
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
-    # -----------------------------
-    # Write service-key.json
-    # -----------------------------
+    # ----------------------------------------------------
+    # 5) จาก secrets → service-key.json
+    # ----------------------------------------------------
     - name: Create service-key.json
       env:
         SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
       run: |
+        mkdir -p gee-pipeline
         echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
+    # ----------------------------------------------------
+    # 6) Debug JSON (optional)
+    # ----------------------------------------------------
     - name: DEBUG — Show generated JSON
       run: |
         echo "----- JSON START -----"
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
 
-    # -----------------------------
-    # Run GEE export to GCS
-    # -----------------------------
+    # ----------------------------------------------------
+    # 7) Export จาก GEE → GCS
+    # ----------------------------------------------------
     - name: Run Export Script (GEE → GCS)
       env:
         SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
@@ -63,9 +77,9 @@ jobs:
       run: |
         python gee-pipeline/scripts/gee_export_tasks.py
 
-    # -----------------------------
-    # Download from GCS → Parquet
-    # -----------------------------
+    # ----------------------------------------------------
+    # 8) Download จาก GCS → Parquet
+    # ----------------------------------------------------
     - name: Download from GCS & Convert to Parquet
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
@@ -73,20 +87,36 @@ jobs:
       run: |
         python gee-pipeline/scripts/poll_download_convert.py
 
-    # -----------------------------
-    # Clean Raw Data
-    # -----------------------------
+    # ----------------------------------------------------
+    # 9) Clean raw data → monthly CSV
+    # ----------------------------------------------------
     - name: Clean Raw Data
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
-    # -----------------------------
-    # Commit clean data back to repo
-    # -----------------------------
-    - name: Commit Cleaned Data to Repo
+    # ----------------------------------------------------
+    # 10) Track ไฟล์ใหญ่ด้วย Git LFS
+    # ----------------------------------------------------
+    - name: Configure Git LFS tracking
       run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add .
-        git commit -m "Automated monthly update" || echo "No changes to commit"
-        git push
+        git lfs install
+        git lfs track "*.parquet"
+
+    # ----------------------------------------------------
+    # 11) Create Pull Request (ไม่ push ตรง)
+    # ----------------------------------------------------
+    - name: Create Pull Request with updates
+      uses: peter-evans/create-pull-request@v6
+      with:
+        commit-message: "Monthly update – $(date)"
+        title: "Monthly GEE Update — $(date)"
+        body: |
+          ระบบอัปเดตข้อมูลรายเดือนเสร็จสมบูรณ์ ✔  
+          กรุณาตรวจสอบไฟล์ก่อน merge
+
+        branch: monthly-update
+        delete-branch: true
+        token: ${{ secrets.GITHUB_TOKEN }}
+        labels: automated, monthly
+        author: Kanvara001 <173020456+Kanvara001@users.noreply.github.com>
+        committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
