@@ -1,63 +1,77 @@
 import os
 import json
 import time
+import pandas as pd
 from google.cloud import storage
-import geopandas as gpd
+from google.api_core.exceptions import NotFound
 
-BUCKET = os.environ["GCS_BUCKET"]
-RAW_PREFIX = "raw_export"
-OUT_DIR = "gee-pipeline/outputs/raw_parquet"
+BUCKET = os.getenv("GCS_BUCKET")
 
-os.makedirs(OUT_DIR, exist_ok=True)
+RAW_EXPORT_PREFIX = "raw_export/"
+OUTPUT_DIR = "gee-pipeline/outputs/raw_parquet"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-storage_client = storage.Client.from_service_account_json(
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-)
+client = storage.Client()
 
-bucket = storage_client.bucket(BUCKET)
 
-def list_all_geojson():
-    return [
-        b for b in bucket.list_blobs(prefix=RAW_PREFIX)
-        if b.name.endswith(".geojson")
-    ]
+def safe_blob_exists(blob):
+    """เช็คว่า blob มีอยู่จริงแบบไม่ให้ error"""
+    try:
+        blob.reload()
+        return True
+    except NotFound:
+        return False
+
 
 def download_and_convert(blob):
-    local_geojson = f"/tmp/{os.path.basename(blob.name)}"
-
-    parquet_name = os.path.basename(blob.name).replace(".geojson", ".parquet")
-    local_parquet = os.path.join(OUT_DIR, parquet_name)
+    """ดาวน์โหลด geojson → แปลงเป็น parquet"""
+    local_geojson = os.path.join(OUTPUT_DIR, blob.name.split("/")[-1])
 
     print(f"⬇ Downloading: {blob.name}")
-    blob.reload()
-
-    if not blob.size:
-        print(f"⚠ Skip empty object: {blob.name}")
-        return
-
     blob.download_to_filename(local_geojson)
 
-    gdf = gpd.read_file(local_geojson)
-    gdf.to_parquet(local_parquet)
+    df = pd.read_json(local_geojson)
+    parquet_path = local_geojson.replace(".geojson", ".parquet")
 
-    print("✔ Converted:", local_parquet)
+    df.to_parquet(parquet_path)
+    print(f"✔ Converted: {parquet_path}")
+
+    os.remove(local_geojson)
+
 
 def main():
     print("🔍 Checking bucket…")
 
-    while True:
-        files = list_all_geojson()
+    bucket = client.bucket(BUCKET)
+    blobs = list(bucket.list_blobs(prefix=RAW_EXPORT_PREFIX))
 
-        if len(files) == 0:
-            print("⏳ No files yet. Waiting 30 sec…")
-            time.sleep(30)
+    if not blobs:
+        print("⚠ No exported files found in bucket.")
+        return
+
+    for blob in blobs:
+        path = blob.name
+
+        # ข้ามโฟลเดอร์
+        if path.endswith("/"):
             continue
 
-        for blob in files:
-            download_and_convert(blob)
+        # เช็คไฟล์ว่ามีจริงหรือไม่
+        if not safe_blob_exists(blob):
+            print(f"⚠ Skip missing file: {path}")
+            continue
 
-        print("🎉 Completed.")
-        break
+        # ข้ามไฟล์ที่ดาวน์โหลดไปแล้ว
+        parquet_name = path.split("/")[-1].replace(".geojson", ".parquet")
+        parquet_path = os.path.join(OUTPUT_DIR, parquet_name)
+
+        if os.path.exists(parquet_path):
+            print(f"✔ Already processed: {path}")
+            continue
+
+        # download + convert
+        download_and_convert(blob)
+
 
 if __name__ == "__main__":
     main()
