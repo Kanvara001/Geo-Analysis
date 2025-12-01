@@ -1,64 +1,55 @@
-import pandas as pd
-import glob
 import os
+import glob
+import pandas as pd
 
-RAW_CSV = "gee-pipeline/raw_export/*.csv"
-RAW_PARQUET = "gee-pipeline/outputs/raw_parquet/*.parquet"
-OUT_FILE = "gee-pipeline/processed/monthly_clean.csv"
+RAW_CSV_DIR = "gee-pipeline/raw_export"
+PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
+OUTPUT_CLEAN = "gee-pipeline/processed/monthly_clean.csv"
 
-files = glob.glob(RAW_CSV)
+print("🔍 Checking raw_export/ for CSV files...")
 
-# If no CSV → read parquet and convert
-if not files:
-    parquet_files = glob.glob(RAW_PARQUET)
-    if not parquet_files:
-        print("❌ No raw CSV or Parquet files found.")
-        exit(1)
+# 1) หาไฟล์ CSV ก่อน
+csv_files = glob.glob(f"{RAW_CSV_DIR}/*.csv")
 
+if len(csv_files) == 0:
     print("ℹ No CSV found. Converting Parquet → CSV automatically…")
 
-    frames = []
-    for pq in parquet_files:
-        df = pd.read_parquet(pq)
-        frames.append(df)
+    parquet_files = glob.glob(f"{PARQUET_DIR}/*.parquet")
 
-    full = pd.concat(frames)
-    full.to_csv("gee-pipeline/raw_export/auto_from_parquet.csv", index=False)
-    files = [ "gee-pipeline/raw_export/auto_from_parquet.csv" ]
-
-dfs = []
-
-for f in files:
-    df = pd.read_csv(f)
-
-    # Required columns
-    mapping = {
-        "Province": "province",
-        "District": "amphoe",
-        "Subdistric": "tambon",
-    }
-
-    for old, new in mapping.items():
-        if old in df.columns:
-            df[new] = df[old]
-
-    missing = [c for c in ["province","amphoe","tambon"] if c not in df.columns]
-    if missing:
-        print("❌ Missing columns:", missing)
+    if len(parquet_files) == 0:
+        print("❌ No Parquet files found in outputs/raw_parquet/. Cannot continue.")
         exit(1)
 
-    # value/count fix
-    if "mean" in df.columns:
-        df["value"] = pd.to_numeric(df["mean"], errors="coerce").fillna(0)
-    if "count" in df.columns:
-        df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0)
+    # โหลดทุก parquet รวมเป็น dataframe เดียว
+    frames = []
+    for fp in parquet_files:
+        print(f"   → Loading {fp}")
+        frames.append(pd.read_parquet(fp))
 
-    dfs.append(df)
+    full = pd.concat(frames, ignore_index=True)
 
-full = pd.concat(dfs)
-full = full.sort_values(["province","amphoe","tambon","year","month"])
+    # สร้างโฟลเดอร์ก่อนเซฟ
+    os.makedirs(RAW_CSV_DIR, exist_ok=True)
 
+    tmp_csv = f"{RAW_CSV_DIR}/auto_from_parquet.csv"
+    full.to_csv(tmp_csv, index=False)
+    print(f"✔ Parquet converted → {tmp_csv}")
+
+    csv_files = [tmp_csv]
+
+# 2) โหลด CSV ที่ได้มาทั้งหมด
+print("📑 Loading CSV files…")
+
+dfs = [pd.read_csv(fp) for fp in csv_files]
+
+full_df = pd.concat(dfs, ignore_index=True)
+
+# 3) ทำความสะอาดข้อมูลตามที่ต้องการ
+print("🧹 Cleaning data…")
+full_df = full_df.drop_duplicates()
+
+# 4) เซฟเป็น monthly_clean.csv
 os.makedirs("gee-pipeline/processed", exist_ok=True)
-full.to_csv(OUT_FILE, index=False)
+full_df.to_csv(OUTPUT_CLEAN, index=False)
 
-print("✅ Cleaned data saved:", OUT_FILE)
+print(f"✅ Cleaning completed → {OUTPUT_CLEAN}")
