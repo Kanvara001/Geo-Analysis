@@ -3,7 +3,7 @@ import ee
 from datetime import datetime
 import time
 
-SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT_EMAIL"]
+SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 CREDENTIALS = "gee-pipeline/service-key.json"
 BUCKET = os.environ["GCS_BUCKET"]
 
