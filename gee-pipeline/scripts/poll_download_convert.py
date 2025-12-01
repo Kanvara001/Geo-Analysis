@@ -1,75 +1,88 @@
 import os
 import json
-import time
 import pandas as pd
 from google.cloud import storage
-from google.api_core.exceptions import NotFound
 
-BUCKET = os.getenv("GCS_BUCKET")
+BUCKET_NAME = os.environ["GCS_BUCKET"]
 
-RAW_EXPORT_PREFIX = "raw_export/"
-OUTPUT_DIR = "gee-pipeline/outputs/raw_parquet"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# -----------------------------
+# Function: Flatten GeoJSON
+# -----------------------------
+def geojson_to_dataframe(path):
+    """
+    Load a GeoJSON file and flatten features into a clean DataFrame.
+    Each row = 1 feature.
+    """
 
-client = storage.Client()
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    all_rows = []
+
+    for feature in data.get("features", []):
+        props = feature.get("properties", {})
+        geom = feature.get("geometry", {})
+
+        row = {}
+
+        # Add all properties normally
+        for k, v in props.items():
+            row[k] = v
+
+        # Geometry handling (store geometry as WKT string)
+        if geom.get("type") == "Point":
+            coords = geom["coordinates"]
+            row["lon"] = coords[0]
+            row["lat"] = coords[1]
+        else:
+            # If polygon or others, save JSON as text
+            row["geometry_json"] = json.dumps(geom)
+
+        all_rows.append(row)
+
+    return pd.DataFrame(all_rows)
 
 
-def safe_blob_exists(blob):
-    """เช็คว่า blob มีอยู่จริงแบบไม่ให้ error"""
-    try:
-        blob.reload()
-        return True
-    except NotFound:
-        return False
-
-
+# -----------------------------
+# Function: Download + Convert
+# -----------------------------
 def download_and_convert(blob):
-    """ดาวน์โหลด geojson → แปลงเป็น parquet"""
-    local_geojson = os.path.join(OUTPUT_DIR, blob.name.split("/")[-1])
-
-    print(f"⬇ Downloading: {blob.name}")
+    local_geojson = f"/tmp/{blob.name.replace('/', '_')}"
     blob.download_to_filename(local_geojson)
 
-    df = pd.read_json(local_geojson)
-    parquet_path = local_geojson.replace(".geojson", ".parquet")
+    print(f"⬇ Downloaded: {blob.name}")
 
-    df.to_parquet(parquet_path)
-    print(f"✔ Converted: {parquet_path}")
+    # Convert to DataFrame
+    df = geojson_to_dataframe(local_geojson)
 
-    os.remove(local_geojson)
+    # Ensure output folder exists
+    os.makedirs("gee-pipeline/outputs/raw_parquet", exist_ok=True)
+
+    out_name = blob.name.split("/")[-1].replace(".geojson", "").replace(".geojson", "")
+    parquet_path = f"gee-pipeline/outputs/raw_parquet/{out_name}.parquet"
+
+    df.to_parquet(parquet_path, index=False)
+    print(f"✔ Converted → {parquet_path}")
 
 
+# -----------------------------
+# Main
+# -----------------------------
 def main():
     print("🔍 Checking bucket…")
 
-    bucket = client.bucket(BUCKET)
-    blobs = list(bucket.list_blobs(prefix=RAW_EXPORT_PREFIX))
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
 
-    if not blobs:
-        print("⚠ No exported files found in bucket.")
+    blobs = list(bucket.list_blobs(prefix="raw_export/"))
+
+    targets = [b for b in blobs if b.name.endswith(".geojson.geojson")]
+
+    if not targets:
+        print("⚠ No GeoJSON found. Nothing to convert.")
         return
 
-    for blob in blobs:
-        path = blob.name
-
-        # ข้ามโฟลเดอร์
-        if path.endswith("/"):
-            continue
-
-        # เช็คไฟล์ว่ามีจริงหรือไม่
-        if not safe_blob_exists(blob):
-            print(f"⚠ Skip missing file: {path}")
-            continue
-
-        # ข้ามไฟล์ที่ดาวน์โหลดไปแล้ว
-        parquet_name = path.split("/")[-1].replace(".geojson", ".parquet")
-        parquet_path = os.path.join(OUTPUT_DIR, parquet_name)
-
-        if os.path.exists(parquet_path):
-            print(f"✔ Already processed: {path}")
-            continue
-
-        # download + convert
+    for blob in targets:
         download_and_convert(blob)
 
 
