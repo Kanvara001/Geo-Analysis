@@ -1,11 +1,11 @@
 import os
-import json
 import time
 from google.cloud import storage
 import geopandas as gpd
 
 BUCKET = os.environ["GCS_BUCKET"]
 RAW_PREFIX = "raw_export"
+ARCHIVE_PREFIX = "archive"
 OUT_DIR = "gee-pipeline/outputs/raw_parquet"
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -20,17 +20,28 @@ def list_all_geojson():
     return [b for b in bucket.list_blobs(prefix=RAW_PREFIX) if b.name.endswith(".geojson")]
 
 def download_and_convert(blob):
-    local_geojson = f"/tmp/{os.path.basename(blob.name)}"
-    local_parquet = os.path.join(
-        OUT_DIR,
-        os.path.basename(blob.name).replace(".geojson", ".parquet")
-    )
+    filename = os.path.basename(blob.name)
+    
+    # Detect metadata from filename
+    variable, year, month = filename.replace(".geojson", "").split("_")
+    year = int(year)
+    month = int(month)
 
+    local_geojson = f"/tmp/{filename}"
+    local_parquet = f"/tmp/{variable}.parquet"
+
+    # Download raw GeoJSON
     blob.download_to_filename(local_geojson)
+
+    # Convert
     gdf = gpd.read_file(local_geojson)
     gdf.to_parquet(local_parquet)
 
-    print("✔ Converted:", local_parquet)
+    # Upload to GCS archive/YYYY/MM/variable.parquet
+    archive_path = f"{ARCHIVE_PREFIX}/{year}/{month:02d}/{variable}.parquet"
+    bucket.blob(archive_path).upload_from_filename(local_parquet)
+
+    print(f"✔ Uploaded to archive: {archive_path}")
 
 def main():
     print("🔍 Checking bucket…")
