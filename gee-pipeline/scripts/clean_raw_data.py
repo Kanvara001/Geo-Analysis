@@ -2,52 +2,63 @@ import pandas as pd
 import glob
 import os
 
-RAW_DIR = "gee-pipeline/outputs/raw_parquet/*.parquet"
+RAW_CSV = "gee-pipeline/raw_export/*.csv"
+RAW_PARQUET = "gee-pipeline/outputs/raw_parquet/*.parquet"
 OUT_FILE = "gee-pipeline/processed/monthly_clean.csv"
 
-files = glob.glob(RAW_DIR)
+files = glob.glob(RAW_CSV)
+
+# If no CSV → read parquet and convert
 if not files:
-    print("❌ No Parquet files found in outputs/raw_parquet/")
-    exit(1)
-
-dfs = []
-for f in files:
-    df = pd.read_parquet(f)
-
-    # Check required fields exist
-    missing = [c for c in ["Province", "District", "Subdistric"] if c not in df.columns]
-    if missing:
-        print("❌ Missing columns in:", f, missing)
+    parquet_files = glob.glob(RAW_PARQUET)
+    if not parquet_files:
+        print("❌ No raw CSV or Parquet files found.")
         exit(1)
 
-    # Extract year_month from filename
-    base = os.path.basename(f).replace(".parquet", "")
-    try:
-        variable, year, month = base.split("_")
-        df["year"] = int(year)
-        df["month"] = int(month)
-        df["variable"] = variable
-    except:
-        print("⚠ Filename format incorrect:", f)
+    print("ℹ No CSV found. Converting Parquet → CSV automatically…")
 
-    # Rename for consistency
-    df = df.rename(columns={
+    frames = []
+    for pq in parquet_files:
+        df = pd.read_parquet(pq)
+        frames.append(df)
+
+    full = pd.concat(frames)
+    full.to_csv("gee-pipeline/raw_export/auto_from_parquet.csv", index=False)
+    files = [ "gee-pipeline/raw_export/auto_from_parquet.csv" ]
+
+dfs = []
+
+for f in files:
+    df = pd.read_csv(f)
+
+    # Required columns
+    mapping = {
         "Province": "province",
         "District": "amphoe",
-        "Subdistric": "tambon"
-    })
+        "Subdistric": "tambon",
+    }
 
-    # Convert numeric
-    df["value"] = pd.to_numeric(df.get("mean"), errors="coerce")
-    df["count"] = pd.to_numeric(df.get("count"), errors="coerce")
+    for old, new in mapping.items():
+        if old in df.columns:
+            df[new] = df[old]
+
+    missing = [c for c in ["province","amphoe","tambon"] if c not in df.columns]
+    if missing:
+        print("❌ Missing columns:", missing)
+        exit(1)
+
+    # value/count fix
+    if "mean" in df.columns:
+        df["value"] = pd.to_numeric(df["mean"], errors="coerce").fillna(0)
+    if "count" in df.columns:
+        df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0)
 
     dfs.append(df)
 
 full = pd.concat(dfs)
-full = full.sort_values(["province", "amphoe", "tambon", "year", "month"])
+full = full.sort_values(["province","amphoe","tambon","year","month"])
 
-# Export cleaned
-os.makedirs(os.path.dirname(OUT_FILE), exist_ok=True)
+os.makedirs("gee-pipeline/processed", exist_ok=True)
 full.to_csv(OUT_FILE, index=False)
 
-print("✅ Cleaned monthly dataset saved:", OUT_FILE)
+print("✅ Cleaned data saved:", OUT_FILE)
