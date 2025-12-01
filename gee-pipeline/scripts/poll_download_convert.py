@@ -5,7 +5,6 @@ import geopandas as gpd
 
 BUCKET = os.environ["GCS_BUCKET"]
 RAW_PREFIX = "raw_export"
-ARCHIVE_PREFIX = "archive"
 OUT_DIR = "gee-pipeline/outputs/raw_parquet"
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -16,48 +15,52 @@ storage_client = storage.Client.from_service_account_json(
 
 bucket = storage_client.bucket(BUCKET)
 
-def list_all_geojson():
-    return [b for b in bucket.list_blobs(prefix=RAW_PREFIX) if b.name.endswith(".geojson")]
+def list_geojson_files():
+    """Accept .geojson and .geojson.geojson"""
+    blobs = bucket.list_blobs(prefix=RAW_PREFIX)
+    out = []
+    for b in blobs:
+        if b.name.endswith(".geojson") or b.name.endswith(".geojson.geojson"):
+            out.append(b)
+    return out
+
+def normalize_filename(name: str):
+    """Remove duplicated `.geojson.geojson` → `.geojson`"""
+    if name.endswith(".geojson.geojson"):
+        return name[:-8]  # remove the second ".geojson"
+    return name
 
 def download_and_convert(blob):
-    filename = os.path.basename(blob.name)
-    
-    # Detect metadata from filename
-    variable, year, month = filename.replace(".geojson", "").split("_")
-    year = int(year)
-    month = int(month)
+    clean_name = normalize_filename(blob.name)
 
-    local_geojson = f"/tmp/{filename}"
-    local_parquet = f"/tmp/{variable}.parquet"
+    local_geojson = f"/tmp/{os.path.basename(clean_name)}"
+    local_parquet = os.path.join(
+        OUT_DIR,
+        os.path.basename(clean_name).replace(".geojson", ".parquet")
+    )
 
-    # Download raw GeoJSON
     blob.download_to_filename(local_geojson)
 
-    # Convert
     gdf = gpd.read_file(local_geojson)
     gdf.to_parquet(local_parquet)
 
-    # Upload to GCS archive/YYYY/MM/variable.parquet
-    archive_path = f"{ARCHIVE_PREFIX}/{year}/{month:02d}/{variable}.parquet"
-    bucket.blob(archive_path).upload_from_filename(local_parquet)
-
-    print(f"✔ Uploaded to archive: {archive_path}")
+    print("✔ Converted:", local_parquet)
 
 def main():
     print("🔍 Checking bucket…")
 
     while True:
-        files = list_all_geojson()
+        files = list_geojson_files()
 
         if len(files) == 0:
-            print("⏳ No files yet. Waiting 30 sec…")
+            print("⏳ No files found yet. Waiting 30 sec…")
             time.sleep(30)
             continue
 
         for blob in files:
             download_and_convert(blob)
 
-        print("🎉 Completed.")
+        print("🎉 All files processed.")
         break
 
 if __name__ == "__main__":
