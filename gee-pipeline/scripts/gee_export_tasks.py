@@ -1,98 +1,100 @@
 import ee
-import json
-import os
-from datetime import datetime
+import datetime
+import time
 
-# Load service account key
-with open("gee-pipeline/service-key.json") as f:
-    key_data = json.load(f)
+# ------------------------------
+# 1) INITIALIZE SERVICE ACCOUNT
+# ------------------------------
+SERVICE_ACCOUNT = "YOUR_SERVICE_ACCOUNT@project.iam.gserviceaccount.com"
+KEY_FILE = "gee-pipeline/service-key.json"
 
-SERVICE_ACCOUNT = key_data["client_email"]
-PROJECT_ID = key_data["project_id"]
+credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_FILE)
+ee.Initialize(credentials)
+print("Initialized Earth Engine with service account.")
 
-ee.Authenticate(credentials=ee.ServiceAccountCredentials(SERVICE_ACCOUNT, "gee-pipeline/service-key.json"))
-ee.Initialize(project=PROJECT_ID)
 
-# Study provinces (9 provinces)
-PROVINCES = ["Khon Kaen", "Loei", "Udon Thani", "Nong Bua Lamphu",
-             "Nakhon Ratchasima", "Buri Ram", "Kalasin",
-             "Maha Sarakham", "Chaiyaphum"]
+# ------------------------------
+# 2) TIME RANGE (monthly)
+# ------------------------------
+now = datetime.datetime.utcnow()
+year = now.year
+month = now.month
 
-# Variables to export
-VARIABLES = {
-    "NDVI": {
-        "collection": "MODIS/061/MOD13Q1",
-        "band": "NDVI"
-    },
-    "LST": {
-        "collection": "MODIS/061/MOD11A2",
-        "band": "LST_Day_1km"
-    },
-    "SoilMoisture": {
-        "collection": "NASA_USDA/HSL/SMAP10KM_soil_moisture",
-        "band": "ssm"
-    },
-    "Rainfall": {
-        "collection": "UCSB-CHG/CHIRPS/DAILY",
-        "band": "precipitation"
-    },
-    "FireCount": {
-        "collection": "FIRMS",
-        "band": "fire_mask"
-    }
+start_date = f"{year}-{month:02d}-01"
+end_date = f"{year}-{month:02d}-28"  # safe end
+
+
+# ------------------------------
+# 3) COUNTRY SHAPE (Thailand)
+# ------------------------------
+th = ee.FeatureCollection("FAO/GAUL/2015/level0") \
+        .filter(ee.Filter.eq("ADM0_NAME", "Thailand")) \
+        .geometry()
+
+
+# ------------------------------
+# 4) DEFINE DATASETS
+# ------------------------------
+
+def get_firecount(start, end):
+    col = ee.ImageCollection("FIRMS").filterDate(start, end).filterBounds(th)
+    return col.count().rename("fire_count")
+
+def get_ndvi(start, end):
+    col = ee.ImageCollection("MODIS/061/MOD13Q1").filterDate(start, end)
+    img = col.mean()
+    return img.select("NDVI").rename("ndvi")
+
+def get_lst(start, end):
+    col = ee.ImageCollection("MODIS/061/MOD11A1").filterDate(start, end)
+    img = col.mean()
+    lst = img.select("LST_Day_1km").multiply(0.02).subtract(273.15)
+    return lst.rename("lst")
+
+def get_soilmoisture(start, end):
+    col = ee.ImageCollection("NASA_USDA/HSL/SMAP10KM_soil_moisture").filterDate(start, end)
+    return col.mean().select("ssm").rename("soil_moisture")
+
+def get_rainfall(start, end):
+    col = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY").filterDate(start, end)
+    return col.sum().rename("rainfall")
+
+
+# ------------------------------
+# 5) TASK EXPORT FUNCTION
+# ------------------------------
+def export_image(image, var_name):
+    file_name = f"{var_name}_{year}_{month:02d}"
+
+    task = ee.batch.Export.image.toCloudStorage(
+        image=image,
+        description=file_name,
+        bucket="YOUR_BUCKET_NAME",
+        fileNamePrefix=f"raw_export/{var_name}/{file_name}",
+        region=th,
+        scale=1000,
+        maxPixels=1e13,
+        fileFormat="GeoJSON"
+    )
+
+    task.start()
+    print(f"🚀 Started export for {var_name}")
+
+    time.sleep(2)
+
+
+# ------------------------------
+# 6) EXECUTE ALL EXPORTS
+# ------------------------------
+datasets = {
+    "FireCount": get_firecount(start_date, end_date),
+    "NDVI": get_ndvi(start_date, end_date),
+    "LST": get_lst(start_date, end_date),
+    "SoilMoisture": get_soilmoisture(start_date, end_date),
+    "Rainfall": get_rainfall(start_date, end_date),
 }
 
-# Google Cloud bucket
-BUCKET = os.environ.get("GCS_BUCKET")
+for var, img in datasets.items():
+    export_image(img, var)
 
-def get_province_geometry(province):
-    """Load Thailand province boundary from your asset path."""
-    fc = ee.FeatureCollection("projects/geo-analysis-472713/assets/thailand_provinces")
-    return fc.filter(ee.Filter.eq("name", province)).geometry()
-
-def export_month(variable, year, month):
-    info = VARIABLES[variable]
-
-    start = ee.Date.fromYMD(year, month, 1)
-    end = start.advance(1, "month")
-
-    collection = ee.ImageCollection(info["collection"]) \
-        .filterDate(start, end) \
-        .select(info["band"]) \
-        .mean()
-
-    for province in PROVINCES:
-        geom = get_province_geometry(province)
-
-        file_name = f"{variable}_{year}_{month:02d}_{province.replace(' ', '')}"
-
-        task = ee.batch.Export.table.toCloudStorage(
-            collection.sampleRegions(
-                collection=collection,
-                regions=geom,
-                scale=1000,
-                geometries=True
-            ),
-            description=file_name,
-            bucket=BUCKET,
-            fileNamePrefix=f"raw_export/{variable}/{year}/{month:02d}/{file_name}",
-            fileFormat="GeoJSON"
-        )
-        task.start()
-        print("🚀 Exporting:", file_name)
-
-def main():
-    today = datetime.utcnow()
-    year = today.year
-    month = today.month - 1
-    if month == 0:
-        year -= 1
-        month = 12
-
-    print(f"📤 Exporting month: {year}-{month:02d}")
-
-    for var in VARIABLES:
-        export_month(var, year, month)
-
-if __name__ == "__main__":
-    main()
+print("🎉 All export tasks started successfully!")
