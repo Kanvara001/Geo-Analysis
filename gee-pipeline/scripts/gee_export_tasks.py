@@ -22,7 +22,7 @@ ee.Initialize(credentials)
 # Load geometry
 # -----------------------------
 TAMBON = ee.FeatureCollection(
-    "projects/geo-analysis-472713/assets/shapefile_provinces"
+    "projects/geo-analysis-472713/assets/json_provinces"
 )
 
 # -----------------------------
