@@ -1,66 +1,96 @@
+import pandas as pd
+import numpy as np
 import os
 import glob
-import pandas as pd
 
-PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
-OUT_CSV = "gee-pipeline/processed/monthly_clean.csv"
+RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
+OUTPUT_CLEAN = "gee-pipeline/outputs/clean"
 
-os.makedirs("gee-pipeline/processed", exist_ok=True)
+os.makedirs(OUTPUT_CLEAN, exist_ok=True)
 
-# prefix mapping
-VAR_MAP = {
-    "NDVI": "ndvi",
-    "LST": "lst",
-    "Rainfall": "rain",
-    "SoilMoisture": "soil",
-    "FireCount": "fire"
+LONG_GAP_THRESHOLD = {
+    "NDVI": 2,
+    "LST": 2,
+    "SoilMoisture": 1,
+    "Rainfall": 1,
+    "FireCount": 1,
 }
 
-def detect_var(path):
-    """Infer variable name from filename prefix."""
-    for key in VAR_MAP:
-        if key.lower() in path.lower():
-            return VAR_MAP[key]
-    return None
+# -------------------------------------------
+# Load all parquet files (all variable folders)
+# -------------------------------------------
+def load_all():
+    files = glob.glob(f"{RAW_PARQUET_DIR}/**/*.parquet", recursive=True)
 
+    if len(files) == 0:
+        raise ValueError("❌ No parquet files found in raw_parquet/. Pipeline earlier step failed.")
 
-def main():
-    print("🔍 Loading Parquet files...")
-
-    files = glob.glob(f"{PARQUET_DIR}/*.parquet")
-    if not files:
-        print("❌ No Parquet files found.")
-        return
-
-    merged = None
-
+    dfs = []
     for f in files:
-        var = detect_var(f)
-        if var is None:
-            print(f"⚠ Skip (unknown variable): {f}")
-            continue
+        try:
+            df = pd.read_parquet(f)
+            dfs.append(df)
+        except Exception as e:
+            print(f"⚠️ Failed to read {f}: {e}")
 
-        print(f"📥 Reading {var}: {f}")
-        df = pd.read_parquet(f)
+    if len(dfs) == 0:
+        raise ValueError("❌ No usable parquet files loaded.")
 
-        # rename "value" column → variable name
-        df = df.rename(columns={"value": var})
+    return pd.concat(dfs, ignore_index=True)
 
-        # merge by lat/lon
-        if merged is None:
-            merged = df
+# -------------------------------------------
+# Cleaning per variable
+# -------------------------------------------
+def clean_variable(df, var):
+    temp = df[df["variable"] == var].copy()
+
+    # convert value to numeric
+    temp["value"] = pd.to_numeric(temp["value"], errors="coerce")
+
+    # sort
+    temp = temp.sort_values(
+        ["province", "amphoe", "tambon", "year", "month"]
+    )
+
+    def fill_group(g):
+        s = g["value"]
+
+        # detect long gaps
+        long_gap = (
+            s.isna()
+            .astype(int)
+            .groupby((s.notna()).cumsum())
+            .transform("count")
+            .max()
+        )
+
+        if long_gap >= LONG_GAP_THRESHOLD.get(var, 2):
+            climatology = s.groupby(g["month"]).transform("mean")
+            new = s.fillna(climatology)
         else:
-            merged = merged.merge(df, on=["lat", "lon"], how="outer")
+            new = s.interpolate()
 
-    if merged is None:
-        print("❌ No usable datasets found.")
-        return
+        return new
 
-    print(f"💾 Saving merged CSV → {OUT_CSV}")
-    merged.to_csv(OUT_CSV, index=False)
+    clean_values = temp.groupby(
+        ["province", "amphoe", "tambon"]
+    ).apply(fill_group)
 
-    print("🎉 Done! monthly_clean.csv generated.")
+    temp["clean_value"] = clean_values.values
+    return temp
 
+# -------------------------------------------
+# RUN CLEANING
+# -------------------------------------------
+df = load_all()
 
-if __name__ == "__main__":
-    main()
+cleaned = []
+for var in df["variable"].unique():
+    print(f"🧼 Cleaning variable → {var}")
+    cleaned.append(clean_variable(df, var))
+
+out = pd.concat(cleaned)
+out_path = f"{OUTPUT_CLEAN}/cleaned_combined.csv"
+
+out.to_csv(out_path, index=False)
+print(f"✔ Cleaning complete → {out_path}")
