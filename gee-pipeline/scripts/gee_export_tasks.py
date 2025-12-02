@@ -1,161 +1,87 @@
-# === gee_export_tasks.py ===
-
 import ee
-import json
 import os
-import time
+import json
 from datetime import datetime
 
 # -----------------------------
-# Load service account
+# Load service account key
 # -----------------------------
-SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
-KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+KEY_PATH = "gee-pipeline/service-key.json"
 
-with open(KEYFILE, "r") as f:
+with open(KEY_PATH, "r") as f:
     key_data = json.load(f)
 
-credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
-ee.Initialize(credentials)
+SERVICE_ACCOUNT = key_data["client_email"]
 
 # -----------------------------
-# Load geometry
+# Initialize GEE
 # -----------------------------
-TAMBON = ee.FeatureCollection(
-    "projects/geo-analysis-472713/assets/shapefile_provinces"
-)
+credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEY_PATH)
+ee.Initialize(credentials)
+
 
 # -----------------------------
 # Config
 # -----------------------------
-RAW_OUTPUT = "raw_export"
-BATCH_SIZE = 20
+YEAR = datetime.utcnow().year
+MONTH = datetime.utcnow().month
 
-YEARS = list(range(2015, 2025))
-MONTHS = list(range(1, 13))
+EXPORT_BUCKET = "geo-analysis-472713-bucket"  # <--- IMPORTANT
+BASE_PATH = f"{EXPORT_BUCKET}/raw_export"
 
-# -----------------------------
-# Dataset definitions
-# -----------------------------
-DATASETS = {
+VARIABLES = {
     "NDVI": {
-        "ic": "MODIS/061/MOD13Q1",
-        "scale": 250,
-        "reducer": ee.Reducer.mean(),
-        "band": "NDVI",
+        "collection": "MODIS/061/MOD13A2",
+        "band": "NDVI"
     },
     "LST": {
-        "ic": "MODIS/061/MOD11A2",
-        "scale": 1000,
-        "reducer": ee.Reducer.mean(),
-        "band": "LST_Day_1km",
-    },
-    "SoilMoisture": {
-        "ic": "NASA_USDA/HSL/SMAP10KM_soil_moisture",
-        "scale": 10000,
-        "reducer": ee.Reducer.mean(),
-        "band": "ssm",
-    },
-    "Rainfall": {
-        "ic": "NASA/GPM_L3/IMERG_V06",
-        "scale": 10000,
-        "reducer": ee.Reducer.sum(),
-        "band": "precipitationCal",
+        "collection": "MODIS/061/MOD11A2",
+        "band": "LST_Day_1km"
     },
     "FireCount": {
-        "ic": "MODIS/061/MOD14A1",      # 🔥 ใช้ dataset จริง
-        "scale": 1000,
-        "band": "FireMask",
-    },
+        "collection": "MODIS/061/MOD14A1",
+        "band": "FireMask"
+    }
 }
 
 # -----------------------------
-# Helper for monthly interval
+# Define region of interest
 # -----------------------------
-def month_filter(year, month):
-    start = ee.Date.fromYMD(year, month, 1)
-    end = start.advance(1, "month")
-    return start, end
+roi = ee.FeatureCollection("FAO/GAUL/2015/level1") \
+    .filter(ee.Filter.eq("ADM0_NAME", "Thailand"))
 
 
 # -----------------------------
-# Export one month of one variable
+# Export function
 # -----------------------------
-def export_month(year, month, variable, spec):
+def export_variable(var_name, cfg):
+    collection = ee.ImageCollection(cfg["collection"]) \
+        .filterDate(f"{YEAR}-{MONTH:02d}-01", f"{YEAR}-{MONTH:02d}-28") \
+        .mean() \
+        .select(cfg["band"])
 
-    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
-
-    band = spec["band"]
-    scale = spec["scale"]
-
-    # Special handling for fire count
-    if variable == "FireCount":
-        # FireMask: 0 = no fire, 2/3/4/... = active fire
-        fire = ic.select(band) \
-                 .map(lambda img: img.gt(0)) \
-                 .sum()   # count per pixel
-
-        img = fire
-
-        reducer = ee.Reducer.sum()
-
-    else:
-        reducer = spec["reducer"]
-        img = ic.select(band).mean()
-
-    # Zonal statistics
-    zonal = img.reduceRegions(
-        collection=TAMBON,
-        reducer=reducer,
-        scale=scale,
-    )
-
-    # Add metadata
-    zonal = zonal.map(lambda f: f.set({
-        "year": year,
-        "month": month,
-        "variable": variable,
-    }))
-
-    filename = f"{variable}_{year}_{month:02d}.geojson"
+    out_name = f"{var_name}_{YEAR}_{MONTH:02d}.geojson"
 
     task = ee.batch.Export.table.toCloudStorage(
-        collection=zonal,
-        description=f"{variable}_{year}_{month}",
-        bucket=os.environ["GCS_BUCKET"],
-        fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
-        fileFormat="GeoJSON",
+        collection.reduceRegions(
+            collection=roi,
+            reducer=ee.Reducer.mean(),
+            scale=1000
+        ),
+        description=f"export_{var_name}",
+        bucket=EXPORT_BUCKET,
+        fileNamePrefix=f"raw_export/{var_name}/{out_name}",
+        fileFormat="GeoJSON"
     )
+
+    print(f"📤 Exporting {var_name} → raw_export/{var_name}/{out_name}")
     task.start()
-    return task
 
 
 # -----------------------------
-# Batch runner
+# MAIN
 # -----------------------------
-def run_all_exports():
-    all_tasks = []
-    count = 0
+for var, cfg in VARIABLES.items():
+    export_variable(var, cfg)
 
-    for var, spec in DATASETS.items():
-        for y in YEARS:
-            for m in MONTHS:
-
-                task = export_month(y, m, var, spec)
-                all_tasks.append(task)
-                count += 1
-
-                if count % BATCH_SIZE == 0:
-                    print(f"⏳ Waiting for GEE… batch {count} submitted")
-                    time.sleep(25)
-
-    print(f"🎉 All {len(all_tasks)} tasks submitted.")
-    return all_tasks
-
-
-# -----------------------------
-# Run script
-# -----------------------------
-if __name__ == "__main__":
-    print("🚀 Starting GEE exports (batch mode)…")
-    run_all_exports()
+print("✅ All export tasks started.")
