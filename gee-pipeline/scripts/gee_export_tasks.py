@@ -117,7 +117,7 @@ def export_month(year, month, variable, spec):
         "variable": variable,
     }))
 
-    filename = f"{variable}_{year}_{month:02d}.geojson"
+    filename = f"{variable}_{year}_{month:02d}"
 
     task = ee.batch.Export.table.toCloudStorage(
         collection=zonal,
