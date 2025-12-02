@@ -35,7 +35,7 @@ YEARS = list(range(2015, 2025))
 MONTHS = list(range(1, 13))
 
 # -----------------------------
-# Dataset configuration
+# Dataset definitions
 # -----------------------------
 DATASETS = {
     "NDVI": {
@@ -51,27 +51,26 @@ DATASETS = {
         "band": "LST_Day_1km",
     },
     "SoilMoisture": {
-        "ic": "NASA/SMAP/SPL4SMGP/007",      # ← UPDATED (รุ่นใหม่)
+        "ic": "NASA_USDA/HSL/SMAP10KM_soil_moisture",
         "scale": 10000,
         "reducer": ee.Reducer.mean(),
-        "band": "sm_surface",                # ← UPDATED (band ใหม่)
+        "band": "ssm",
     },
     "Rainfall": {
-        "ic": "NASA/GPM_L3/IMERG_V07",       # ← UPDATED
+        "ic": "NASA/GPM_L3/IMERG_V06",
         "scale": 10000,
         "reducer": ee.Reducer.sum(),
         "band": "precipitationCal",
     },
     "FireCount": {
-        "ic": "MODIS/061/MOD14A1",           # ← UPDATED ให้แมพกับ FIRMS root
+        "ic": "MODIS/061/MOD14A1",      # 🔥 ใช้ dataset จริง
         "scale": 1000,
-        "reducer": ee.Reducer.count(),
-        "band": "FireMask",                  # ← UPDATED
+        "band": "FireMask",
     },
 }
 
 # -----------------------------
-# Filter for each month
+# Helper for monthly interval
 # -----------------------------
 def month_filter(year, month):
     start = ee.Date.fromYMD(year, month, 1)
@@ -80,27 +79,43 @@ def month_filter(year, month):
 
 
 # -----------------------------
-# Export function
+# Export one month of one variable
 # -----------------------------
 def export_month(year, month, variable, spec):
+
     ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
 
-    img = ic.select(spec["band"]).mean()
+    band = spec["band"]
+    scale = spec["scale"]
 
-    # Zonal reduction
+    # Special handling for fire count
+    if variable == "FireCount":
+        # FireMask: 0 = no fire, 2/3/4/... = active fire
+        fire = ic.select(band) \
+                 .map(lambda img: img.gt(0)) \
+                 .sum()   # count per pixel
+
+        img = fire
+
+        reducer = ee.Reducer.sum()
+
+    else:
+        reducer = spec["reducer"]
+        img = ic.select(band).mean()
+
+    # Zonal statistics
     zonal = img.reduceRegions(
         collection=TAMBON,
-        reducer=spec["reducer"],
-        scale=spec["scale"],
+        reducer=reducer,
+        scale=scale,
     )
 
-    zonal = zonal.map(
-        lambda f: f.set({
-            "year": year,
-            "month": month,
-            "variable": variable,
-        })
-    )
+    # Add metadata
+    zonal = zonal.map(lambda f: f.set({
+        "year": year,
+        "month": month,
+        "variable": variable,
+    }))
 
     filename = f"{variable}_{year}_{month:02d}.geojson"
 
@@ -116,7 +131,7 @@ def export_month(year, month, variable, spec):
 
 
 # -----------------------------
-# Run all tasks in batch mode
+# Batch runner
 # -----------------------------
 def run_all_exports():
     all_tasks = []
@@ -132,7 +147,7 @@ def run_all_exports():
 
                 if count % BATCH_SIZE == 0:
                     print(f"⏳ Waiting for GEE… batch {count} submitted")
-                    time.sleep(20)
+                    time.sleep(25)
 
     print(f"🎉 All {len(all_tasks)} tasks submitted.")
     return all_tasks
