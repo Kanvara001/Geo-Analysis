@@ -37,35 +37,35 @@ MONTHS = list(range(1, 13))
 # Dataset definitions
 # -----------------------------
 DATASETS = {
-    "NDVI": {
-        "ic": "MODIS/061/MOD13Q1",
-        "scale": 250,
-        "reducer": ee.Reducer.mean(),
-        "band": "NDVI",
-    },
-    "LST": {
-        "ic": "MODIS/061/MOD11A2",
-        "scale": 1000,
-        "reducer": ee.Reducer.mean(),
-        "band": "LST_Day_1km",
-    },
-    "SoilMoisture": {  # ใช้ SPL4SMGP
+    # "NDVI": {
+    #     "ic": "MODIS/061/MOD13Q1",
+    #     "scale": 250,
+    #     "reducer": ee.Reducer.mean(),
+    #     "band": "NDVI",
+    # },
+    # "LST": {
+    #     "ic": "MODIS/061/MOD11A2",
+    #     "scale": 1000,
+    #     "reducer": ee.Reducer.mean(),
+    #     "band": "LST_Day_1km",
+    # },
+    "SoilMoisture": {  
         "ic": "NASA/SMAP/SPL4SMGP/007",
         "scale": 10000,
         "reducer": ee.Reducer.mean(),
-        "band": "soil_moisture",  # ตรวจสอบชื่อ band ใน dataset ใหม่
+        "band": "sm_surface",
     },
-    "Rainfall": {  # ใช้ CHIRPS daily
-        "ic": "UCSB-CHG/CHIRPS/DAILY",
-        "scale": 10000,
-        "reducer": ee.Reducer.sum(),
-        "band": "precipitation",  # ตรวจสอบชื่อ band
-    },
-    "FireCount": {
-        "ic": "MODIS/061/MOD14A1",
-        "scale": 1000,
-        "band": "FireMask",
-    },
+    # "Rainfall": {
+    #     "ic": "UCSB-CHG/CHIRPS/DAILY",
+    #     "scale": 10000,
+    #     "reducer": ee.Reducer.sum(),
+    #     "band": "precipitation",
+    # },
+    # "FireCount": {
+    #     "ic": "MODIS/061/MOD14A1",
+    #     "scale": 1000,
+    #     "band": "FireMask",
+    # },
 }
 
 # -----------------------------
@@ -84,15 +84,9 @@ def export_month(year, month, variable, spec):
 
     band = spec["band"]
     scale = spec["scale"]
+    reducer = spec["reducer"]
 
-    # Special handling for fire count
-    if variable == "FireCount":
-        fire = ic.select(band).map(lambda img: img.gt(0)).sum()
-        img = fire
-        reducer = ee.Reducer.sum()
-    else:
-        reducer = spec["reducer"]
-        img = ic.select(band).mean()
+    img = ic.select(band).mean()
 
     zonal = img.reduceRegions(
         collection=TAMBON,
@@ -125,7 +119,7 @@ def run_all_exports():
     all_tasks = []
     count = 0
 
-    for var, spec in DATASETS.items():
+    for var, spec in DATASETS.items():  # 👈 จะมีแค่ SoilMoisture อย่างเดียว
         for y in YEARS:
             for m in MONTHS:
                 task = export_month(y, m, var, spec)
@@ -143,5 +137,5 @@ def run_all_exports():
 # Run script
 # -----------------------------
 if __name__ == "__main__":
-    print("🚀 Starting GEE exports (batch mode)…")
+    print("🚀 Starting GEE exports (SoilMoisture only)…")
     run_all_exports()
