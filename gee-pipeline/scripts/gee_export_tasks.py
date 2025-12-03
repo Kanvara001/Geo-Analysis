@@ -1,5 +1,3 @@
-# === gee_export_tasks.py ===
-
 import ee
 import json
 import os
@@ -31,7 +29,8 @@ TAMBON = ee.FeatureCollection(
 RAW_OUTPUT = "raw_export"
 BATCH_SIZE = 20
 
-YEARS = list(range(2015, 2025))
+CURRENT_YEAR = datetime.now().year
+YEARS = list(range(2015, CURRENT_YEAR + 1))
 MONTHS = list(range(1, 13))
 
 # -----------------------------
@@ -63,7 +62,7 @@ DATASETS = {
         "band": "precipitationCal",
     },
     "FireCount": {
-        "ic": "MODIS/061/MOD14A1",      # 🔥 ใช้ dataset จริง
+        "ic": "MODIS/061/MOD14A1",
         "scale": 1000,
         "band": "FireMask",
     },
@@ -77,12 +76,10 @@ def month_filter(year, month):
     end = start.advance(1, "month")
     return start, end
 
-
 # -----------------------------
 # Export one month of one variable
 # -----------------------------
 def export_month(year, month, variable, spec):
-
     ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
 
     band = spec["band"]
@@ -90,27 +87,19 @@ def export_month(year, month, variable, spec):
 
     # Special handling for fire count
     if variable == "FireCount":
-        # FireMask: 0 = no fire, 2/3/4/... = active fire
-        fire = ic.select(band) \
-                 .map(lambda img: img.gt(0)) \
-                 .sum()   # count per pixel
-
+        fire = ic.select(band).map(lambda img: img.gt(0)).sum()
         img = fire
-
         reducer = ee.Reducer.sum()
-
     else:
         reducer = spec["reducer"]
         img = ic.select(band).mean()
 
-    # Zonal statistics
     zonal = img.reduceRegions(
         collection=TAMBON,
         reducer=reducer,
         scale=scale,
     )
 
-    # Add metadata
     zonal = zonal.map(lambda f: f.set({
         "year": year,
         "month": month,
@@ -129,7 +118,6 @@ def export_month(year, month, variable, spec):
     task.start()
     return task
 
-
 # -----------------------------
 # Batch runner
 # -----------------------------
@@ -140,7 +128,6 @@ def run_all_exports():
     for var, spec in DATASETS.items():
         for y in YEARS:
             for m in MONTHS:
-
                 task = export_month(y, m, var, spec)
                 all_tasks.append(task)
                 count += 1
@@ -151,7 +138,6 @@ def run_all_exports():
 
     print(f"🎉 All {len(all_tasks)} tasks submitted.")
     return all_tasks
-
 
 # -----------------------------
 # Run script
