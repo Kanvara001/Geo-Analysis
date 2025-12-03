@@ -49,17 +49,17 @@ DATASETS = {
         "reducer": ee.Reducer.mean(),
         "band": "LST_Day_1km",
     },
-    "SoilMoisture": {
-        "ic": "NASA_USDA/HSL/SMAP10KM_soil_moisture",
+    "SoilMoisture": {  # ใช้ SPL4SMGP
+        "ic": "NASA/SMAP/SPL4SMGP/007",
         "scale": 10000,
         "reducer": ee.Reducer.mean(),
-        "band": "ssm",
+        "band": "soil_moisture",  # ตรวจสอบชื่อ band ใน dataset ใหม่
     },
-    "Rainfall": {
-        "ic": "NASA/GPM_L3/IMERG_V06",
+    "Rainfall": {  # ใช้ CHIRPS daily
+        "ic": "UCSB-CHG/CHIRPS/DAILY",
         "scale": 10000,
         "reducer": ee.Reducer.sum(),
-        "band": "precipitationCal",
+        "band": "precipitation",  # ตรวจสอบชื่อ band
     },
     "FireCount": {
         "ic": "MODIS/061/MOD14A1",
