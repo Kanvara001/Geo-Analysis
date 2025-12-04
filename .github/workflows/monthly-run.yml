@@ -1,12 +1,11 @@
-name: GEE Pipeline (Poll + Clean Only)
+name: GEE Full Pipeline After Export
 
 on:
-  workflow_dispatch:   # ✅ รันเมื่อกดปุ่มเท่านั้น
+  workflow_dispatch:
 
 jobs:
   poll-convert-clean:
     runs-on: ubuntu-latest
-    timeout-minutes: 600   # ป้องกัน timeout
 
     steps:
     - name: Checkout repository
@@ -34,8 +33,8 @@ jobs:
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
 
-    # ❌ ไม่ต้องรัน export
-    # - name: Run Export Script (GEE → GCS)
+    # 🚫 Export step ไม่ต้องรันแล้ว
+    # - name: Run Export Script (GEE → GCS) w;hdHwfh
     #   env:
     #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
     #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
@@ -43,23 +42,7 @@ jobs:
     #   run: |
     #     python gee-pipeline/scripts/gee_export_tasks.py
 
-    - name: Debug — List files in GCS bucket
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: |
-        python - <<EOF
-from google.cloud import storage
-import os
-
-client = storage.Client()
-bucket = client.bucket(os.environ["GCS_BUCKET"])
-
-print("📁 Files in raw_export/:")
-for b in bucket.list_blobs(prefix="raw_export/"):
-    print(" -", b.name)
-EOF
-
+    # ✅ ดาวน์โหลดจาก GCS และ convert เป็น parquet
     - name: Download from GCS & Convert to Parquet
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
@@ -67,14 +50,16 @@ EOF
       run: |
         python gee-pipeline/scripts/poll_download_convert.py
 
-    - name: Clean Raw Data
+    # ✅ Cleaning data
+    - name: Clean raw parquet
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
+    # ✅ Commit cleaned data
     - name: Commit Cleaned Data to Repo
       run: |
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
-        git add .
-        git commit -m "Automated cleaning update" || echo "No changes to commit"
+        git add gee-pipeline/outputs/clean/*
+        git commit -m "Automated clean update" || echo "No changes to commit"
         git push
