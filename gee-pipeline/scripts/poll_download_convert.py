@@ -7,33 +7,28 @@ from google.cloud import storage
 BUCKET_NAME = os.environ["GCS_BUCKET"]
 RAW_DIR = "raw_export"
 
+# Save Parquet here (match clean_raw_data.py)
+RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
+os.makedirs(RAW_PARQUET_DIR, exist_ok=True)
+
 client = storage.Client()
 
-
 def list_files():
-    """List all GeoJSON files inside raw_export/ from GCS"""
     bucket = client.bucket(BUCKET_NAME)
     blobs = bucket.list_blobs(prefix=RAW_DIR)
     return [b for b in blobs if b.name.endswith(".geojson")]
 
-
 def safe_flatten_feature(f):
-    """Flatten GEE feature safely, removing geometry + nested objects."""
     props = f.get("properties", {})
-
-    # remove geometry entirely
     props.pop("geometry", None)
     f.pop("geometry", None)
 
-    # remove nested lists & dicts (Parquet incompatible)
     clean = {}
     for k, v in props.items():
         if isinstance(v, (list, dict)):
             continue
         clean[k] = v
-
     return clean
-
 
 def download_and_convert(files):
     bucket = client.bucket(BUCKET_NAME)
@@ -42,30 +37,22 @@ def download_and_convert(files):
         print(f"⬇ Downloading {blob.name} ...")
         content = blob.download_as_text()
         data = json.loads(content)
-
-        # GeoJSON FeatureCollection
-        features = data.get("features", [])
-
-        # Flatten + clean
-        rows = [safe_flatten_feature(f) for f in features]
+        rows = [safe_flatten_feature(f) for f in data.get("features", [])]
 
         df = pd.DataFrame(rows)
 
-        # Local paths
-        local_json = blob.name.replace("raw_export/", "local_raw/")
-        local_parquet = local_json.replace(".geojson", ".parquet")
+        # Ensure correct final filenames
+        filename = blob.name.split("/")[-1].replace(".geojson", "")
+        local_parquet = f"{RAW_PARQUET_DIR}/{filename}.parquet"
+        local_json = f"{RAW_PARQUET_DIR}/{filename}.json"
 
-        os.makedirs(os.path.dirname(local_json), exist_ok=True)
-        os.makedirs(os.path.dirname(local_parquet), exist_ok=True)
-
-        # Save cleaned JSON
+        # Save JSON (optional)
         with open(local_json, "w") as f:
             json.dump(rows, f)
 
-        # Save Parquet safely
+        # Save PARQUET
         print(f"➡ Converting to {local_parquet}")
         df.to_parquet(local_parquet, index=False)
-
 
 def main():
     print("📡 Checking Google Cloud Storage...")
@@ -78,7 +65,6 @@ def main():
     print(f"Found {len(files)} files.")
     download_and_convert(files)
     print("🎉 Conversion complete!")
-
 
 if __name__ == "__main__":
     main()
