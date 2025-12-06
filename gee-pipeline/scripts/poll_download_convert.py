@@ -1,4 +1,5 @@
 import os
+import argparse
 import pandas as pd
 from google.cloud import storage
 from tqdm import tqdm
@@ -8,87 +9,74 @@ import pyarrow as pa
 RAW_OUTPUT = "gee-pipeline/outputs/raw_parquet"
 os.makedirs(RAW_OUTPUT, exist_ok=True)
 
-# ----------------------------------------
-#   LOAD ENV
-# ----------------------------------------
-bucket_name = os.getenv("GCS_BUCKET")
+# --------------------------
+# Args
+# --------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument("--var", type=str, help="Filter variable name (NDVI, LST, Rainfall, ...)")
+parser.add_argument("--limit", type=int, help="Limit number of files")
+args = parser.parse_args()
 
+# --------------------------
+# Load ENV
+# --------------------------
+bucket_name = os.getenv("GCS_BUCKET")
 if not bucket_name:
-    raise ValueError("❌ ERROR: GCS_BUCKET is not set in environment variables!")
+    raise ValueError("❌ GCS_BUCKET not set")
 
 credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 if not credentials_path:
-    raise ValueError("❌ ERROR: GOOGLE_APPLICATION_CREDENTIALS is not set!")
+    raise ValueError("❌ GOOGLE_APPLICATION_CREDENTIALS not set")
 
-# ----------------------------------------
-#   INIT CLIENT
-# ----------------------------------------
+# --------------------------
+# Init client
+# --------------------------
 client = storage.Client.from_service_account_json(credentials_path)
 bucket = client.bucket(bucket_name)
 
-# ----------------------------------------
-#   DOWNLOAD FILES
-# ----------------------------------------
-print(f"📥 Downloading files from bucket: {bucket_name}")
+# --------------------------
+# List blobs
+# --------------------------
+print(f"📥 Downloading from bucket: {bucket_name}")
 
 blobs = list(bucket.list_blobs(prefix="export/"))
 
-if len(blobs) == 0:
-    print("⚠ No files found in export/ path.")
-    exit()
+# Filter by var
+if args.var:
+    blobs = [b for b in blobs if args.var.upper() in b.name.upper()]
+    print(f"🔎 Filtered for variable: {args.var} → {len(blobs)} files")
 
+# Apply limit
+if args.limit:
+    blobs = blobs[:args.limit]
+    print(f"🔢 Limit = {args.limit}")
+
+if len(blobs) == 0:
+    print("⚠ No matching files found.")
+    exit(0)
+
+# --------------------------
+# Download
+# --------------------------
 for blob in tqdm(blobs, desc="Downloading"):
     if not blob.name.endswith(".csv"):
         continue
 
-    filename = os.path.basename(blob.name)
-    local_path = os.path.join(RAW_OUTPUT, filename)
-
+    local_path = os.path.join(RAW_OUTPUT, os.path.basename(blob.name))
     blob.download_to_filename(local_path)
 
-print("✅ Download complete")
-
-# ----------------------------------------
-#   CONVERT TO PARQUET
-# ----------------------------------------
-print("🔄 Converting CSV → Parquet")
-
+# --------------------------
+# Convert CSV → Parquet
+# --------------------------
 csv_files = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".csv")]
 
-if not csv_files:
-    raise RuntimeError("❌ No CSV files found in raw_parquet directory!")
-
 for csv_file in tqdm(csv_files, desc="Converting"):
-    csv_path = os.path.join(RAW_OUTPUT, csv_file)
-    df = pd.read_csv(csv_path)
-
-    # Clean column names: lowercase
-    df.columns = [col.strip().lower() for col in df.columns]
-
-    # Check required columns (just warning)
-    required_cols = ["province", "district", "subdistrict", "month", "year", "variable"]
-    for col in required_cols:
-        if col not in df.columns:
-            print(f"⚠ Missing column: {col} in {csv_file}")
-
-    parquet_path = csv_path.replace(".csv", ".parquet")
+    df = pd.read_csv(os.path.join(RAW_OUTPUT, csv_file))
+    df.columns = [c.strip().lower() for c in df.columns]
 
     table = pa.Table.from_pandas(df)
-    pq.write_table(table, parquet_path)
+    pq.write_table(table, os.path.join(RAW_OUTPUT, csv_file.replace(".csv", ".parquet")))
 
-    # REMOVE CSV after converting
-    os.remove(csv_path)
+    os.remove(os.path.join(RAW_OUTPUT, csv_file))
 
-print("🎉 CSV converted → Parquet successfully")
-
-# ----------------------------------------
-#   VERIFY PARQUET EXISTS
-# ----------------------------------------
-parquet_files = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".parquet")]
-
-print(f"📦 Parquet files found: {len(parquet_files)}")
-for f in parquet_files:
-    print(" -", f)
-
-if len(parquet_files) == 0:
-    raise RuntimeError("❌ No Parquet files found after conversion! Clean step will fail.")
+print("🎉 Convert OK")
