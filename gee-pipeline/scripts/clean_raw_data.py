@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 import numpy as np
 import os
@@ -5,10 +6,12 @@ import glob
 
 RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
 OUTPUT_CLEAN = "gee-pipeline/outputs/clean"
-
 os.makedirs(OUTPUT_CLEAN, exist_ok=True)
 
-# Threshold (months)
+parser = argparse.ArgumentParser()
+parser.add_argument("--var", type=str, help="Clean a specific variable only")
+args = parser.parse_args()
+
 LONG_GAP_THRESHOLD = {
     "NDVI": 2,
     "LST": 2,
@@ -17,7 +20,6 @@ LONG_GAP_THRESHOLD = {
     "FireCount": 2,
 }
 
-# Map column names to unified "value"
 VALUE_COL = {
     "NDVI": "mean",
     "LST": "mean",
@@ -26,74 +28,65 @@ VALUE_COL = {
     "FireCount": "sum",
 }
 
-# ------- Load all parquet -------
-def load_all():
-    files = glob.glob(f"{RAW_PARQUET_DIR}/*.parquet")
-    dfs = [pd.read_parquet(f) for f in files]
-    return pd.concat(dfs, ignore_index=True)
+# ------------- Load files -------------
+files = glob.glob(f"{RAW_PARQUET_DIR}/*.parquet")
+dfs = [pd.read_parquet(f) for f in files]
 
-df = load_all()
+if len(dfs) == 0:
+    raise RuntimeError("❌ No parquet files found")
 
-# Normalize to common value column
-df["value"] = df.apply(lambda row: row[VALUE_COL[row["variable"]]], axis=1)
+df = pd.concat(dfs, ignore_index=True)
 
-# Create date column
+# Filter specific variable
+if args.var:
+    df = df[df["variable"] == args.var]
+    if df.empty:
+        raise RuntimeError(f"❌ No data found for variable {args.var}")
+
+df["value"] = df.apply(lambda r: r[VALUE_COL[r["variable"]]], axis=1)
 df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=1))
 
-# Global monthly climatology (NDVI only)
+# NDVI climatology (global)
 df_ndvi = df[df["variable"] == "NDVI"].copy()
 global_climatology_NDVI = df_ndvi.groupby("month")["value"].mean()
 
-# ---------- Clean per variable ----------
 def clean_variable(df, var):
     temp = df[df["variable"] == var].copy()
-    temp["value"] = pd.to_numeric(temp["value"], errors="coerce")
     temp = temp.sort_values(["province", "amphoe", "tambon", "date"])
+    groups_cleaned = []
 
-    cleaned_groups = []
+    for (prov, amp, tam), g in temp.groupby(["province", "amphoe", "tambon"]):
+        full_range = pd.date_range(g["date"].min(), g["date"].max(), freq="MS")
+        g = g.set_index("date").reindex(full_range)
+        g[["province","amphoe","tambon","variable"]] = (
+            g[["province","amphoe","tambon","variable"]].ffill().bfill()
+        )
 
-    for (prov, amph, tambon), g in temp.groupby(["province", "amphoe", "tambon"]):
-
-        # Reindex full month range
-        full_idx = pd.date_range(g["date"].min(), g["date"].max(), freq="MS")
-        g = g.set_index("date").reindex(full_idx)
-
-        cols = ["province","amphoe","tambon","variable","year","month"]
-        g[cols] = g[cols].ffill().bfill()
-
-        g["value"] = pd.to_numeric(g["value"], errors="coerce")
-        g["year"] = g.index.year
-        g["month"] = g.index.month
-
-        s = g["value"]
-
-        # Compute longest missing
+        s = pd.to_numeric(g["value"], errors="coerce")
         is_na = s.isna()
         groups = (is_na != is_na.shift()).cumsum()
         longest_gap = is_na.astype(int).groupby(groups).sum().max()
 
-        # ---- Apply rules ----
         if longest_gap < LONG_GAP_THRESHOLD[var]:
             g["clean_value"] = s.interpolate()
         else:
             if var == "NDVI":
-                climat = global_climatology_NDVI.reindex(g["month"]).values
+                climat = global_climatology_NDVI.reindex(g.index.month).values
                 g["clean_value"] = s.fillna(climat)
             else:
                 monthly_mean = s.groupby(g.index.month).transform("mean")
                 g["clean_value"] = s.fillna(monthly_mean)
 
-        cleaned_groups.append(
-            g.reset_index().rename(columns={"index": "date"})
-        )
+        groups_cleaned.append(g.reset_index().rename(columns={"index": "date"}))
 
-    return pd.concat(cleaned_groups)
+    return pd.concat(groups_cleaned)
 
-# -------- Run cleaning --------
+
+# Run only for selected variable
 for var in df["variable"].unique():
     clean_df = clean_variable(df, var)
-    out_file = os.path.join(OUTPUT_CLEAN, f"{var}.parquet")
-    clean_df.to_parquet(out_file, index=False)
-    print(f"✅ Cleaned {var} → {out_file}")
+    out_path = os.path.join(OUTPUT_CLEAN, f"{var}.parquet")
+    clean_df.to_parquet(out_path, index=False)
+    print(f"✅ Cleaned {var} → {out_path}")
 
-print("🎉 Cleaning complete for all variables!")
+print("🎉 Clean OK")
