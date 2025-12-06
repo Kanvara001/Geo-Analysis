@@ -1,52 +1,63 @@
-import argparse
-from google.cloud import storage
-import geopandas as gpd
-import pandas as pd
 import os
+import json
+from google.cloud import storage
+import pandas as pd
 from tqdm import tqdm
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--var", type=str, default=None, help="Variable folder name to filter")
-parser.add_argument("--limit", type=int, default=None)
-args = parser.parse_args()
+# -----------------------------
+# CONFIG
+# -----------------------------
+bucket_name = os.getenv("GCS_BUCKET")
+output_folder = "gee-pipeline/outputs/raw"
+
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder, exist_ok=True)
 
 client = storage.Client()
-bucket = client.bucket(os.environ["GCS_BUCKET"])
+bucket = client.bucket(bucket_name)
 
-print("📡 Checking Google Cloud Storage...")
-blobs = bucket.list_blobs(prefix="raw_export/")
-all_files = [b.name for b in blobs if b.name.endswith(".geojson")]
+# -----------------------------
+# LIST FILES
+# -----------------------------
+print("Listing files in bucket:", bucket_name)
+blobs = bucket.list_blobs()
 
-print(f"Found {len(all_files)} files.")
+# เลือกเฉพาะไฟล์ .geojson
+geojson_files = [b for b in blobs if b.name.endswith(".geojson")]
 
-# -----------------------------------------------------
-# 🎯 Correct filtering by folder
-# -----------------------------------------------------
-if args.var:
-    folder = f"raw_export/{args.var}/"
-    files = [f for f in all_files if f.startswith(folder)]
-else:
-    files = all_files
+print(f"Found {len(geojson_files)} .geojson files")
 
-if args.limit:
-    files = files[:args.limit]
+# -----------------------------
+# DOWNLOAD + DEBUG + CONVERT
+# -----------------------------
+for blob in tqdm(geojson_files, desc="Processing files"):
+    local_path = os.path.join(output_folder, os.path.basename(blob.name))
 
-print(f"➡ Will process {len(files)} file(s).")
+    print(f"\nDownloading {blob.name} → {local_path}")
+    blob.download_to_filename(local_path)
 
-os.makedirs("gee-pipeline/outputs/raw_parquet", exist_ok=True)
+    # Load GeoJSON
+    with open(local_path, "r") as f:
+        data = json.load(f)
 
-for file_path in tqdm(files):
-    print(f"⬇ Downloading {file_path} ...")
-    blob = bucket.blob(file_path)
-    local_geojson = "temp.geojson"
-    blob.download_to_filename(local_geojson)
+    features = data.get("features", [])
+    if not features:
+        print("WARNING: No features found in this file!")
+        continue
 
-    gdf = gpd.read_file(local_geojson)
+    # -----------------------------
+    # DEBUG PROPERTIES KEYS
+    # -----------------------------
+    print("DEBUG — Showing first 3 features' property keys:")
+    for i, feat in enumerate(features[:3]):
+        print(f"  Feature {i} keys → {list(feat.get('properties', {}).keys())}")
 
-    # add filename as metadata
-    gdf["source_file"] = os.path.basename(file_path)
+    # -----------------------------
+    # CONVERT TO PARQUET
+    # -----------------------------
+    df = pd.json_normalize(features)
 
-    out_name = os.path.basename(file_path).replace(".geojson", ".parquet")
-    gdf.to_parquet(f"gee-pipeline/outputs/raw_parquet/{out_name}")
+    parquet_path = local_path.replace(".geojson", ".parquet")
+    df.to_parquet(parquet_path, index=False)
 
-    os.remove(local_geojson)
+    print(f"Converted → {parquet_path}")
