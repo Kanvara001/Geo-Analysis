@@ -1,52 +1,50 @@
-name: GEE Test Pipeline
+name: GEE Pipeline Test
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  test-pipeline:
     runs-on: ubuntu-latest
 
-    env:
-      GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    - name: Setup Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
 
-      - name: Install dependencies
-        run: |
-          pip install pandas pyarrow google-cloud-storage tqdm
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r gee-pipeline/requirements.txt
 
-      - name: Write GCP credentials
-        run: |
-          echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" > $GOOGLE_APPLICATION_CREDENTIALS
+    - name: Create service-key.json
+      run: |
+        echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
 
-      - name: Debug env variables
-        run: |
-          echo "Bucket: $GCS_BUCKET"
-          echo "Creds path: $GOOGLE_APPLICATION_CREDENTIALS"
+    - name: Debug show JSON
+      run: |
+        echo "----- JSON START -----"
+        cat gee-pipeline/service-key.json
+        echo "----- JSON END -----"
 
-      - name: Run POLL (Download + Convert CSV → Parquet)
-        run: |
-          python gee-pipeline/scripts/poll_download_convert.py
+    - name: Test Download + Convert (poll)
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+      run: |
+        python gee-pipeline/scripts/poll_download_convert.py
 
-      - name: List downloaded files
-        run: |
-          echo "Files in raw_parquet:"
-          ls -al gee-pipeline/outputs/raw_parquet || true
+    - name: Test Clean
+      run: |
+        python gee-pipeline/scripts/clean_raw_data.py
 
-      - name: Run CLEAN (Clean per variable)
-        run: |
-          python gee-pipeline/scripts/clean_raw_data.py
-
-      - name: List cleaned outputs
-        run: |
-          echo "Files in clean:"
-          ls -al gee-pipeline/outputs/clean || true
+    - name: List outputs (debug)
+      run: |
+        echo "RAW:"
+        ls gee-pipeline/outputs/raw_parquet || true
+        echo "CLEAN:"
+        ls gee-pipeline/outputs/clean || true
