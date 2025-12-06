@@ -1,16 +1,22 @@
-name: GEE Pipeline TEST — Each Variable
+name: GEE Pipeline TEST (Fast)
 
 on:
   workflow_dispatch:
+    inputs:
+      variable:
+        description: "Choose variable to test"
+        required: true
+        type: choice
+        options:
+          - NDVI
+          - LST
+          - SoilMoisture
+          - Rainfall
+          - FireCount
 
 jobs:
-  test-each-variable:
+  poll-convert-clean-test:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        variable: [NDVI, LST, SoilMoisture, Precipitation, FireCount]   # ตัวแปรที่ต้องการเทส
-      fail-fast: false   # ถ้า var ใด var หนึ่ง fail ให้ตัวอื่นยังรันต่อ
 
     steps:
     - name: Checkout repository
@@ -23,7 +29,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install --upgrade pip
+        python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
     - name: Create service-key.json
@@ -32,22 +38,20 @@ jobs:
       run: |
         echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    - name: Download 1 file for ${{ matrix.variable }}
+    - name: Download from GCS & Convert to Parquet (TEST MODE)
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
-        echo "Downloading 1 file for variable = ${{ matrix.variable }}"
-        python gee-pipeline/scripts/poll_download_convert.py --limit 1 --var ${{ matrix.variable }}
+        python gee-pipeline/scripts/poll_download_convert.py --var ${{ github.event.inputs.variable }} --limit 1
 
-    - name: Clean only ${{ matrix.variable }}
+    - name: Clean raw parquet (TEST MODE)
       run: |
-        python gee-pipeline/scripts/clean_raw_data.py ${{ matrix.variable }}
+        python gee-pipeline/scripts/clean_raw_data.py ${{ github.event.inputs.variable }}
 
-    - name: Show output results
+    - name: Show output tree
       run: |
-        echo "===== RAW parquet for ${{ matrix.variable }} ====="
-        ls gee-pipeline/outputs/raw_parquet | grep ${{ matrix.variable }} || true
-
-        echo "===== CLEAN parquet for ${{ matrix.variable }} ====="
-        ls gee-pipeline/outputs/clean | grep ${{ matrix.variable }} || true
+        echo "===== RAW ====="
+        ls -R gee-pipeline/outputs/raw_parquet || true
+        echo "===== CLEAN ====="
+        ls -R gee-pipeline/outputs/clean || true
