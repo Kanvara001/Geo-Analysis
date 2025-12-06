@@ -43,21 +43,30 @@ jobs:
           echo "   Testing variable: $VAR"
           echo "====================================="
 
+          # run poll
           python gee-pipeline/scripts/poll_download_convert.py --var "$VAR" --limit 1
 
-          if [ ! -f gee-pipeline/outputs/raw_parquet/${VAR}.parquet ]; then
+          # verify parquet exists
+          FILE="gee-pipeline/outputs/raw_parquet/${VAR}.parquet"
+          if [ ! -f "$FILE" ]; then
             echo "❌ ERROR: Missing parquet for $VAR"
             exit 1
           fi
 
           echo "Columns in $VAR:"
-          python - <<EOF
-import pandas as pd
 
-df = pd.read_parquet("gee-pipeline/outputs/raw_parquet/${VAR}.parquet")
+          python << 'EOF'
+import pandas as pd
+import sys
+
+var = sys.argv[1]
+path = f"gee-pipeline/outputs/raw_parquet/{var}.parquet"
+
+df = pd.read_parquet(path)
 print("➡ Columns:", list(df.columns))
 print(df.head())
 EOF
+          "$VAR"
 
           echo "✔ Test passed for $VAR"
         done
