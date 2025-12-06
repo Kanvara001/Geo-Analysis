@@ -1,10 +1,10 @@
-name: GEE Pipeline Test
+name: GEE Pipeline — Test Integration
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-pipeline:
+  test-integration:
     runs-on: ubuntu-latest
 
     steps:
@@ -12,7 +12,7 @@ jobs:
       uses: actions/checkout@v3
 
     - name: Setup Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: "3.10"
 
@@ -21,30 +21,73 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
+    # ----------------------------------------------------
+    # 🔑 Load service key — SAFE JSON (printf ไม่ทำ JSON แตก)
+    # ----------------------------------------------------
     - name: Create service-key.json
+      env:
+        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
       run: |
-        echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
+        mkdir -p gee-pipeline
+        printf "%s" "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    - name: Debug show JSON
+    # ----------------------------------------------------
+    # 🔍 Validate JSON (สำคัญ!)
+    # ----------------------------------------------------
+    - name: Validate service-key.json
       run: |
-        echo "----- JSON START -----"
-        cat gee-pipeline/service-key.json
-        echo "----- JSON END -----"
+        echo "Validating service-key.json..."
+        python - << 'EOF'
+import json
+with open("gee-pipeline/service-key.json") as f:
+    json.load(f)
+print("JSON OK ✓")
+EOF
 
-    - name: Test Download + Convert (poll)
+    # ----------------------------------------------------
+    # 🟦 STEP 1 — Poll + Download CSV + Convert Parquet
+    # ----------------------------------------------------
+    - name: Run poll_download_convert
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
+        echo "=== Running poll_download_convert.py ==="
         python gee-pipeline/scripts/poll_download_convert.py
 
-    - name: Test Clean
+    # ----------------------------------------------------
+    # 📂 Check raw_parquet output
+    # ----------------------------------------------------
+    - name: List raw_parquet output
       run: |
+        echo "=== RAW PARQUET OUTPUT ==="
+        ls -R gee-pipeline/outputs/raw_parquet || echo "No raw_parquet folder found"
+
+    # ----------------------------------------------------
+    # 🟧 STEP 2 — Clean parquet files
+    # ----------------------------------------------------
+    - name: Run clean_raw_data
+      run: |
+        echo "=== Running clean_raw_data.py ==="
         python gee-pipeline/scripts/clean_raw_data.py
 
-    - name: List outputs (debug)
+    # ----------------------------------------------------
+    # 📂 Check clean output
+    # ----------------------------------------------------
+    - name: List cleaned output
       run: |
-        echo "RAW:"
-        ls gee-pipeline/outputs/raw_parquet || true
-        echo "CLEAN:"
-        ls gee-pipeline/outputs/clean || true
+        echo "=== CLEAN OUTPUT ==="
+        ls -R gee-pipeline/outputs/clean || echo "No clean folder found"
+
+    # ----------------------------------------------------
+    # 🎉 FINAL — Summary
+    # ----------------------------------------------------
+    - name: Summary
+      run: |
+        echo "==================== SUMMARY ===================="
+        echo "1) JSON OK"
+        echo "2) poll_download_convert.py ran"
+        echo "3) raw_parquet generated (if any files exist)"
+        echo "4) clean_raw_data.py ran"
+        echo "5) No files committed — test only"
+        echo "================================================="
