@@ -1,82 +1,73 @@
-import os
 import argparse
-import pandas as pd
+import os
+import json
 from google.cloud import storage
-from tqdm import tqdm
-import pyarrow.parquet as pq
-import pyarrow as pa
+import pandas as pd
 
-RAW_OUTPUT = "gee-pipeline/outputs/raw_parquet"
-os.makedirs(RAW_OUTPUT, exist_ok=True)
+def download_and_convert(var: str, limit: int):
+    print(f"📥 Starting poll for variable: {var}, limit = {limit}")
 
-# --------------------------
-# Args
-# --------------------------
-parser = argparse.ArgumentParser()
-parser.add_argument("--var", type=str, help="Filter variable name (NDVI, LST, Rainfall, ...)")
-parser.add_argument("--limit", type=int, help="Limit number of files")
-args = parser.parse_args()
+    client = storage.Client()
+    bucket_name = os.environ.get("GCS_BUCKET")
 
-# --------------------------
-# Load ENV
-# --------------------------
-bucket_name = os.getenv("GCS_BUCKET")
-if not bucket_name:
-    raise ValueError("❌ GCS_BUCKET not set")
+    if not bucket_name:
+        raise RuntimeError("Missing GCS_BUCKET env variable")
 
-credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if not credentials_path:
-    raise ValueError("❌ GOOGLE_APPLICATION_CREDENTIALS not set")
+    bucket = client.bucket(bucket_name)
+    blobs = bucket.list_blobs()
 
-# --------------------------
-# Init client
-# --------------------------
-client = storage.Client.from_service_account_json(credentials_path)
-bucket = client.bucket(bucket_name)
+    # Filter only <var>_YYYY_MM.geojson
+    geojson_files = [
+        b for b in blobs
+        if b.name.lower().endswith(".geojson")
+        and b.name.lower().startswith(f"{var.lower()}_")
+    ]
 
-# --------------------------
-# List blobs
-# --------------------------
-print(f"📥 Downloading from bucket: {bucket_name}")
+    print(f"🔎 Found {len(geojson_files)} matching geojson files for {var}")
 
-blobs = list(bucket.list_blobs(prefix="export/"))
+    if len(geojson_files) == 0:
+        print("⚠ No matching files found.")
+        return
 
-# Filter by var
-if args.var:
-    blobs = [b for b in blobs if args.var.upper() in b.name.upper()]
-    print(f"🔎 Filtered for variable: {args.var} → {len(blobs)} files")
+    os.makedirs("raw_geojson", exist_ok=True)
+    os.makedirs("raw_parquet", exist_ok=True)
 
-# Apply limit
-if args.limit:
-    blobs = blobs[:args.limit]
-    print(f"🔢 Limit = {args.limit}")
+    # Sort newest-first (optional, but more predictable)
+    geojson_files = sorted(geojson_files, key=lambda x: x.name, reverse=True)
 
-if len(blobs) == 0:
-    print("⚠ No matching files found.")
-    exit(0)
+    for blob in geojson_files[:limit]:
+        print(f"⬇ Downloading: {blob.name}")
+        local_geojson = f"raw_geojson/{blob.name}"
+        blob.download_to_filename(local_geojson)
 
-# --------------------------
-# Download
-# --------------------------
-for blob in tqdm(blobs, desc="Downloading"):
-    if not blob.name.endswith(".csv"):
-        continue
+        print(f"📄 Reading geojson → {local_geojson}")
+        with open(local_geojson, "r") as f:
+            data = json.load(f)
 
-    local_path = os.path.join(RAW_OUTPUT, os.path.basename(blob.name))
-    blob.download_to_filename(local_path)
+        # Convert FeatureCollection to DataFrame
+        rows = []
+        for feature in data.get("features", []):
+            props = feature.get("properties", {})
+            geom = feature.get("geometry", {})
+            props["geometry"] = json.dumps(geom)
+            rows.append(props)
 
-# --------------------------
-# Convert CSV → Parquet
-# --------------------------
-csv_files = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".csv")]
+        df = pd.DataFrame(rows)
 
-for csv_file in tqdm(csv_files, desc="Converting"):
-    df = pd.read_csv(os.path.join(RAW_OUTPUT, csv_file))
-    df.columns = [c.strip().lower() for c in df.columns]
+        # Save parquet
+        parquet_name = blob.name.replace(".geojson", ".parquet")
+        output_path = f"raw_parquet/{parquet_name}"
 
-    table = pa.Table.from_pandas(df)
-    pq.write_table(table, os.path.join(RAW_OUTPUT, csv_file.replace(".csv", ".parquet")))
+        print(f"💾 Saving parquet → {output_path}")
+        df.to_parquet(output_path, index=False)
 
-    os.remove(os.path.join(RAW_OUTPUT, csv_file))
+    print("✅ Conversion complete.")
 
-print("🎉 Convert OK")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--var", type=str, required=True, help="Variable name (NDVI, LST, SoilMoisture)")
+    parser.add_argument("--limit", type=int, default=5, help="Max files to process")
+
+    args = parser.parse_args()
+    download_and_convert(args.var, args.limit)
