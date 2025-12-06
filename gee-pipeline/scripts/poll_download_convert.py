@@ -55,6 +55,9 @@ print("🔄 Converting CSV → Parquet")
 
 csv_files = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".csv")]
 
+if not csv_files:
+    raise RuntimeError("❌ No CSV files found in raw_parquet directory!")
+
 for csv_file in tqdm(csv_files, desc="Converting"):
     csv_path = os.path.join(RAW_OUTPUT, csv_file)
     df = pd.read_csv(csv_path)
@@ -62,17 +65,30 @@ for csv_file in tqdm(csv_files, desc="Converting"):
     # Clean column names: lowercase
     df.columns = [col.strip().lower() for col in df.columns]
 
-    # Check required columns
+    # Check required columns (just warning)
     required_cols = ["province", "district", "subdistrict", "month", "year", "variable"]
     for col in required_cols:
         if col not in df.columns:
             print(f"⚠ Missing column: {col} in {csv_file}")
 
-    # Parquet filename
     parquet_path = csv_path.replace(".csv", ".parquet")
 
-    # Convert
     table = pa.Table.from_pandas(df)
     pq.write_table(table, parquet_path)
 
-print("🎉 All CSV converted to Parquet successfully")
+    # REMOVE CSV after converting
+    os.remove(csv_path)
+
+print("🎉 CSV converted → Parquet successfully")
+
+# ----------------------------------------
+#   VERIFY PARQUET EXISTS
+# ----------------------------------------
+parquet_files = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".parquet")]
+
+print(f"📦 Parquet files found: {len(parquet_files)}")
+for f in parquet_files:
+    print(" -", f)
+
+if len(parquet_files) == 0:
+    raise RuntimeError("❌ No Parquet files found after conversion! Clean step will fail.")
