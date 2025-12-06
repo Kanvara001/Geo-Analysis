@@ -1,75 +1,52 @@
-import os
-import json
 import argparse
 from google.cloud import storage
+import geopandas as gpd
 import pandas as pd
+import os
+from tqdm import tqdm
 
-BUCKET_NAME = os.environ["GCS_BUCKET"]
-RAW_DIR = "raw_export"
-RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
-
-os.makedirs(RAW_PARQUET_DIR, exist_ok=True)
+parser = argparse.ArgumentParser()
+parser.add_argument("--var", type=str, default=None, help="Variable folder name to filter")
+parser.add_argument("--limit", type=int, default=None)
+args = parser.parse_args()
 
 client = storage.Client()
+bucket = client.bucket(os.environ["GCS_BUCKET"])
 
-def list_files(variable=None):
-    bucket = client.bucket(BUCKET_NAME)
+print("📡 Checking Google Cloud Storage...")
+blobs = bucket.list_blobs(prefix="raw_export/")
+all_files = [b.name for b in blobs if b.name.endswith(".geojson")]
 
-    prefix = RAW_DIR + "/"
-    if variable:
-        prefix = f"{RAW_DIR}/{variable}/"
+print(f"Found {len(all_files)} files.")
 
-    blobs = bucket.list_blobs(prefix=prefix)
-    return [b for b in blobs if b.name.endswith(".geojson")]
+# -----------------------------------------------------
+# 🎯 Correct filtering by folder
+# -----------------------------------------------------
+if args.var:
+    folder = f"raw_export/{args.var}/"
+    files = [f for f in all_files if f.startswith(folder)]
+else:
+    files = all_files
 
-def safe_flatten_feature(f):
-    props = f.get("properties", {})
-    props.pop("geometry", None)
-    f.pop("geometry", None)
+if args.limit:
+    files = files[:args.limit]
 
-    clean = {}
-    for k, v in props.items():
-        if isinstance(v, (list, dict)):
-            continue
-        clean[k] = v
-    return clean
+print(f"➡ Will process {len(files)} file(s).")
 
-def download_and_convert(files):
-    for blob in files:
-        print(f"⬇ Downloading {blob.name} ...")
-        content = blob.download_as_text()
-        data = json.loads(content)
-        rows = [safe_flatten_feature(f) for f in data.get("features", [])]
-        df = pd.DataFrame(rows)
+os.makedirs("gee-pipeline/outputs/raw_parquet", exist_ok=True)
 
-        filename = blob.name.split("/")[-1].replace(".geojson", "")
-        local_parquet = f"{RAW_PARQUET_DIR}/{filename}.parquet"
-        local_json = f"{RAW_PARQUET_DIR}/{filename}.json"
+for file_path in tqdm(files):
+    print(f"⬇ Downloading {file_path} ...")
+    blob = bucket.blob(file_path)
+    local_geojson = "temp.geojson"
+    blob.download_to_filename(local_geojson)
 
-        with open(local_json, "w") as f:
-            json.dump(rows, f)
+    gdf = gpd.read_file(local_geojson)
 
-        print(f"➡ Converting to {local_parquet}")
-        df.to_parquet(local_parquet, index=False)
+    # add filename as metadata
+    gdf["source_file"] = os.path.basename(file_path)
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--var", type=str, default=None)
-    parser.add_argument("--limit", type=int, default=9999999)
-    args = parser.parse_args()
+    out_name = os.path.basename(file_path).replace(".geojson", ".parquet")
+    gdf.to_parquet(f"gee-pipeline/outputs/raw_parquet/{out_name}")
 
-    print("📡 Checking Google Cloud Storage...")
-    files = list_files(args.var)
-
-    if not files:
-        print("⚠ No files found")
-        return
-
-    print(f"Found {len(files)} files")
-    files = files[: args.limit]
-
-    download_and_convert(files)
-    print("🎉 Conversion complete!")
-
-if __name__ == "__main__":
-    main()
+    os.remove(local_geojson)
