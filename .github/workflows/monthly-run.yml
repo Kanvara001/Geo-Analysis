@@ -52,6 +52,14 @@ jobs:
       run: |
         python gee-pipeline/scripts/poll_download_convert.py
 
+    - name: DEBUG — list files after convert
+      run: |
+        echo "Listing gee-pipeline/outputs/raw_parquet"
+        ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
+  
+        echo "Listing local_raw"
+        ls -R local_raw || echo "not found"
+
     - name: Clean raw parquet
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
