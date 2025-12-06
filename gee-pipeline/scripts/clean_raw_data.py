@@ -17,6 +17,15 @@ LONG_GAP_THRESHOLD = {
     "FireCount": 2,
 }
 
+# Map column names to unified "value"
+VALUE_COL = {
+    "NDVI": "mean",
+    "LST": "mean",
+    "Rainfall": "mean",
+    "SoilMoisture": "mean",
+    "FireCount": "sum",
+}
+
 # ------- Load all parquet -------
 def load_all():
     files = glob.glob(f"{RAW_PARQUET_DIR}/*.parquet")
@@ -25,10 +34,13 @@ def load_all():
 
 df = load_all()
 
+# Normalize to common value column
+df["value"] = df.apply(lambda row: row[VALUE_COL[row["variable"]]], axis=1)
+
 # Create date column
 df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=1))
 
-# Global monthly climatology (NDVI only) — FIXED
+# Global monthly climatology (NDVI only)
 df_ndvi = df[df["variable"] == "NDVI"].copy()
 global_climatology_NDVI = df_ndvi.groupby("month")["value"].mean()
 
@@ -49,10 +61,7 @@ def clean_variable(df, var):
         cols = ["province","amphoe","tambon","variable","year","month"]
         g[cols] = g[cols].ffill().bfill()
 
-        # FIX — ensure value column exists
-        if "value" not in g.columns:
-            g["value"] = np.nan
-
+        g["value"] = pd.to_numeric(g["value"], errors="coerce")
         g["year"] = g.index.year
         g["month"] = g.index.month
 
