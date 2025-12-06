@@ -1,19 +1,18 @@
-name: GEE Pipeline TEST (per-variable)
+name: GEE Pipeline TEST
 
 on:
   workflow_dispatch:
 
 jobs:
-
-  # ================================
-  # NDVI TEST
-  # ================================
-  test-ndvi:
+  test-each-variable:
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
 
-    - uses: actions/setup-python@v3
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v3
       with:
         python-version: "3.10"
 
@@ -23,148 +22,46 @@ jobs:
         pip install -r gee-pipeline/requirements.txt
 
     - name: Create service-key.json
-      run: echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
-
-    - name: Download & Convert (NDVI)
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: python gee-pipeline/scripts/poll_download_convert.py --var NDVI --limit 1
-
-    - name: Clean (NDVI)
-      run: python gee-pipeline/scripts/clean_raw_data.py NDVI
-
-    - name: Show output tree
-      run: ls -R gee-pipeline/outputs
-
-
-  # ================================
-  # LST TEST
-  # ================================
-  test-lst:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-
-    - uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-
-    - name: Install dependencies
+        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
       run: |
-        python -m pip install --upgrade pip
-        pip install -r gee-pipeline/requirements.txt
+        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    - name: Create service-key.json
-      run: echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
-
-    - name: Download & Convert (LST)
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: python gee-pipeline/scripts/poll_download_convert.py --var LST --limit 1
-
-    - name: Clean (LST)
-      run: python gee-pipeline/scripts/clean_raw_data.py LST
-
-    - name: Show output tree
-      run: ls -R gee-pipeline/outputs
-
-
-  # ================================
-  # Rainfall TEST
-  # ================================
-  test-rainfall:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-
-    - uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-
-    - name: Install dependencies
+    - name: DEBUG — Show generated JSON
       run: |
-        python -m pip install --upgrade pip
-        pip install -r gee-pipeline/requirements.txt
+        echo "----- JSON START -----"
+        cat gee-pipeline/service-key.json
+        echo "----- JSON END -----"
 
-    - name: Create service-key.json
-      run: echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
-
-    - name: Download & Convert (Rainfall)
+    # -------------------------------
+    # 🔍 TEST EACH VARIABLE
+    # -------------------------------
+    - name: Run poll + convert (all variables, test mode)
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: python gee-pipeline/scripts/poll_download_convert.py --var Rainfall --limit 1
-
-    - name: Clean (Rainfall)
-      run: python gee-pipeline/scripts/clean_raw_data.py Rainfall
-
-    - name: Show output tree
-      run: ls -R gee-pipeline/outputs
-
-
-  # ================================
-  # SoilMoisture TEST
-  # ================================
-  test-soilmoisture:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-
-    - uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-
-    - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r gee-pipeline/requirements.txt
+        VARS=("NDVI" "LST" "Rainfall" "SoilMoisture" "FireCount")
+        for v in "${VARS[@]}"; do
+          echo "============================"
+          echo "   Testing variable: $v"
+          echo "============================"
+          python gee-pipeline/scripts/poll_download_convert.py --var "$v" --limit 1
+        done
 
-    - name: Create service-key.json
-      run: echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
-
-    - name: Download & Convert (SoilMoisture)
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: python gee-pipeline/scripts/poll_download_convert.py --var SoilMoisture --limit 1
-
-    - name: Clean (SoilMoisture)
-      run: python gee-pipeline/scripts/clean_raw_data.py SoilMoisture
-
-    - name: Show output tree
-      run: ls -R gee-pipeline/outputs
-
-
-  # ================================
-  # FireCount TEST
-  # ================================
-  test-firecount:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-
-    - uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-
-    - name: Install dependencies
+    - name: Run clean (all variables)
       run: |
-        python -m pip install --upgrade pip
-        pip install -r gee-pipeline/requirements.txt
-
-    - name: Create service-key.json
-      run: echo "${{ secrets.SERVICE_KEY_JSON }}" > gee-pipeline/service-key.json
-
-    - name: Download & Convert (FireCount)
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: python gee-pipeline/scripts/poll_download_convert.py --var FireCount --limit 1
-
-    - name: Clean (FireCount)
-      run: python gee-pipeline/scripts/clean_raw_data.py FireCount
+        VARS=("NDVI" "LST" "Rainfall" "SoilMoisture" "FireCount")
+        for v in "${VARS[@]}"; do
+          echo "============================"
+          echo "   Cleaning variable: $v"
+          echo "============================"
+          python gee-pipeline/scripts/clean_raw_data.py "$v"
+        done
 
     - name: Show output tree
-      run: ls -R gee-pipeline/outputs
+      run: |
+        echo "===== RAW PARQUET ====="
+        ls -R gee-pipeline/outputs/raw_parquet || true
+        echo "===== CLEAN PARQUET ====="
+        ls -R gee-pipeline/outputs/clean || true
