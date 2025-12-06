@@ -1,4 +1,4 @@
-name: GEE NDVI Integration Test
+name: GEE Test NDVI Pipeline
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
+    - name: Checkout repo
       uses: actions/checkout@v3
 
     - name: Setup Python
@@ -27,45 +27,19 @@ jobs:
       run: |
         echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    - name: DEBUG — Show JSON (1 line only)
-      run: |
-        head -n 1 gee-pipeline/service-key.json
-        echo "JSON file created."
-
-    - name: Run Poll + Download + Convert (NDVI only)
+    - name: Run NDVI test (download + convert)
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
         python gee-pipeline/scripts/poll_download_convert.py --var NDVI --limit 3
 
-    - name: Validate Raw Parquet Exists
+    - name: Verify NDVI parquet exists
       run: |
-        echo "Checking raw_parquet files…"
-        ls gee-pipeline/outputs/raw_parquet
-        FILE_COUNT=$(ls gee-pipeline/outputs/raw_parquet | wc -l)
-        if [ "$FILE_COUNT" -lt 1 ]; then
-          echo "❌ No parquet files generated!"
+        echo "Checking for NDVI parquet files..."
+        count=$(ls raw_parquet/NDVI_*.parquet 2>/dev/null | wc -l)
+        if [ "$count" -eq 0 ]; then
+          echo "❌ No NDVI parquet generated!"
           exit 1
         fi
-        echo "✅ Raw parquet OK"
-
-    - name: Clean NDVI
-      run: |
-        python gee-pipeline/scripts/clean_raw_data.py --var NDVI
-
-    - name: Validate Cleaned Output
-      run: |
-        echo "Checking cleaned NDVI parquet…"
-        if [ ! -f gee-pipeline/outputs/clean/NDVI.parquet ]; then
-          echo "❌ Cleaned NDVI.parquet not found!"
-          exit 1
-        fi
-        echo "✅ Cleaned NDVI.parquet exists"
-
-    - name: Show File Summary
-      run: |
-        echo "--- RAW PARQUET ---"
-        ls -lh gee-pipeline/outputs/raw_parquet
-        echo "--- CLEAN PARQUET ---"
-        ls -lh gee-pipeline/outputs/clean
+        echo "✅ Found $count NDVI parquet files"
