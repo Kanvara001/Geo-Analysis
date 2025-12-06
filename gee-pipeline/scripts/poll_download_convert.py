@@ -1,88 +1,75 @@
-import argparse
-import json
 import os
+import json
+import argparse
 from google.cloud import storage
 import pandas as pd
-import geopandas as gpd
-from tqdm import tqdm
 
+BUCKET_NAME = os.environ["GCS_BUCKET"]
+RAW_DIR = "raw_export"
 RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
+
 os.makedirs(RAW_PARQUET_DIR, exist_ok=True)
 
-# -----------------------------
-# 📌 CLI arguments
-# -----------------------------
-parser = argparse.ArgumentParser()
-parser.add_argument("--var", type=str, default=None, help="Variable to filter (e.g., NDVI, LST)")
-parser.add_argument("--limit", type=int, default=None, help="Limit number of files to download")
-args = parser.parse_args()
-
-# -----------------------------
-# 📌 Connect GCS
-# -----------------------------
 client = storage.Client()
-bucket = client.bucket(os.environ["GCS_BUCKET"])
 
-print("📡 Checking Google Cloud Storage...")
+def list_files(variable=None):
+    bucket = client.bucket(BUCKET_NAME)
 
-# List blobs
-blobs = list(client.list_blobs(os.environ["GCS_BUCKET"], prefix="raw_export/"))
-print(f"Found {len(blobs)} files.")
+    prefix = RAW_DIR + "/"
+    if variable:
+        prefix = f"{RAW_DIR}/{variable}/"
 
-# -----------------------------
-# 📌 Apply VAR FILTER
-# -----------------------------
-if args.var:
-    blobs = [b for b in blobs if f"/{args.var}/" in b.name]
-    print(f"🔍 Filtered by variable={args.var} → {len(blobs)} files")
+    blobs = bucket.list_blobs(prefix=prefix)
+    return [b for b in blobs if b.name.endswith(".geojson")]
 
-# -----------------------------
-# 📌 Apply LIMIT
-# -----------------------------
-if args.limit:
-    blobs = blobs[: args.limit]
-    print(f"🔽 Using limit={args.limit} → processing first {len(blobs)} files")
+def safe_flatten_feature(f):
+    props = f.get("properties", {})
+    props.pop("geometry", None)
+    f.pop("geometry", None)
 
-# -----------------------------
-# 📌 Process each file
-# -----------------------------
-for blob in blobs:
-    print(f"⬇ Downloading {blob.name} ...")
+    clean = {}
+    for k, v in props.items():
+        if isinstance(v, (list, dict)):
+            continue
+        clean[k] = v
+    return clean
 
-    local_json = f"{RAW_PARQUET_DIR}/{os.path.basename(blob.name)}"
-    blob.download_to_filename(local_json)
+def download_and_convert(files):
+    for blob in files:
+        print(f"⬇ Downloading {blob.name} ...")
+        content = blob.download_as_text()
+        data = json.loads(content)
+        rows = [safe_flatten_feature(f) for f in data.get("features", [])]
+        df = pd.DataFrame(rows)
 
-    # Load geojson
-    try:
-        gdf = gpd.read_file(local_json)
-    except Exception as e:
-        print(f"❌ Error reading {local_json}: {e}")
-        continue
+        filename = blob.name.split("/")[-1].replace(".geojson", "")
+        local_parquet = f"{RAW_PARQUET_DIR}/{filename}.parquet"
+        local_json = f"{RAW_PARQUET_DIR}/{filename}.json"
 
-    # Normalize schema (fix inconsistent naming)
-    rename_map = {
-        "Province": "province",
-        "District": "amphoe",
-        "Subdistric": "tambon",
-        "month": "month",
-        "year": "year",
-        "variable": "variable",
-        "mean": "value",
-        "sum": "value",  # FireCount uses "sum"
-    }
-    gdf = gdf.rename(columns={k: v for k, v in rename_map.items() if k in gdf.columns})
+        with open(local_json, "w") as f:
+            json.dump(rows, f)
 
-    # Check required fields
-    required = ["province", "amphoe", "tambon", "variable", "year", "month", "value"]
-    missing = [c for c in required if c not in gdf.columns]
+        print(f"➡ Converting to {local_parquet}")
+        df.to_parquet(local_parquet, index=False)
 
-    if missing:
-        print(f"⚠ WARNING: missing fields: {missing}")
-        continue
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--var", type=str, default=None)
+    parser.add_argument("--limit", type=int, default=9999999)
+    args = parser.parse_args()
 
-    # Save parquet
-    filename = os.path.basename(blob.name).replace(".geojson", ".parquet")
-    output_parquet = f"{RAW_PARQUET_DIR}/{filename}"
-    gdf[required].to_parquet(output_parquet, index=False)
+    print("📡 Checking Google Cloud Storage...")
+    files = list_files(args.var)
 
-    print(f"✔ Saved → {output_parquet}")
+    if not files:
+        print("⚠ No files found")
+        return
+
+    print(f"Found {len(files)} files")
+    files = files[: args.limit]
+
+    download_and_convert(files)
+    print("🎉 Conversion complete!")
+
+if __name__ == "__main__":
+    main()
