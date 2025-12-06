@@ -32,6 +32,9 @@ jobs:
         echo "----- JSON START -----"
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
+        
+    - name: Clear old raw parquet
+      run: rm -rf gee-pipeline/outputs/raw_parquet/*
 
     # -------------------------------
     # 🔍 TEST EACH VARIABLE
