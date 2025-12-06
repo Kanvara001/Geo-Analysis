@@ -1,63 +1,78 @@
 import os
-import json
-from google.cloud import storage
 import pandas as pd
+from google.cloud import storage
 from tqdm import tqdm
+import pyarrow.parquet as pq
+import pyarrow as pa
 
-# -----------------------------
-# CONFIG
-# -----------------------------
+RAW_OUTPUT = "gee-pipeline/outputs/raw_parquet"
+os.makedirs(RAW_OUTPUT, exist_ok=True)
+
+# ----------------------------------------
+#   LOAD ENV
+# ----------------------------------------
 bucket_name = os.getenv("GCS_BUCKET")
-output_folder = "gee-pipeline/outputs/raw"
 
-if not os.path.exists(output_folder):
-    os.makedirs(output_folder, exist_ok=True)
+if not bucket_name:
+    raise ValueError("❌ ERROR: GCS_BUCKET is not set in environment variables!")
 
-client = storage.Client()
+credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not credentials_path:
+    raise ValueError("❌ ERROR: GOOGLE_APPLICATION_CREDENTIALS is not set!")
+
+# ----------------------------------------
+#   INIT CLIENT
+# ----------------------------------------
+client = storage.Client.from_service_account_json(credentials_path)
 bucket = client.bucket(bucket_name)
 
-# -----------------------------
-# LIST FILES
-# -----------------------------
-print("Listing files in bucket:", bucket_name)
-blobs = bucket.list_blobs()
+# ----------------------------------------
+#   DOWNLOAD FILES
+# ----------------------------------------
+print(f"📥 Downloading files from bucket: {bucket_name}")
 
-# เลือกเฉพาะไฟล์ .geojson
-geojson_files = [b for b in blobs if b.name.endswith(".geojson")]
+blobs = list(bucket.list_blobs(prefix="export/"))
 
-print(f"Found {len(geojson_files)} .geojson files")
+if len(blobs) == 0:
+    print("⚠ No files found in export/ path.")
+    exit()
 
-# -----------------------------
-# DOWNLOAD + DEBUG + CONVERT
-# -----------------------------
-for blob in tqdm(geojson_files, desc="Processing files"):
-    local_path = os.path.join(output_folder, os.path.basename(blob.name))
-
-    print(f"\nDownloading {blob.name} → {local_path}")
-    blob.download_to_filename(local_path)
-
-    # Load GeoJSON
-    with open(local_path, "r") as f:
-        data = json.load(f)
-
-    features = data.get("features", [])
-    if not features:
-        print("WARNING: No features found in this file!")
+for blob in tqdm(blobs, desc="Downloading"):
+    if not blob.name.endswith(".csv"):
         continue
 
-    # -----------------------------
-    # DEBUG PROPERTIES KEYS
-    # -----------------------------
-    print("DEBUG — Showing first 3 features' property keys:")
-    for i, feat in enumerate(features[:3]):
-        print(f"  Feature {i} keys → {list(feat.get('properties', {}).keys())}")
+    filename = os.path.basename(blob.name)
+    local_path = os.path.join(RAW_OUTPUT, filename)
 
-    # -----------------------------
-    # CONVERT TO PARQUET
-    # -----------------------------
-    df = pd.json_normalize(features)
+    blob.download_to_filename(local_path)
 
-    parquet_path = local_path.replace(".geojson", ".parquet")
-    df.to_parquet(parquet_path, index=False)
+print("✅ Download complete")
 
-    print(f"Converted → {parquet_path}")
+# ----------------------------------------
+#   CONVERT TO PARQUET
+# ----------------------------------------
+print("🔄 Converting CSV → Parquet")
+
+csv_files = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".csv")]
+
+for csv_file in tqdm(csv_files, desc="Converting"):
+    csv_path = os.path.join(RAW_OUTPUT, csv_file)
+    df = pd.read_csv(csv_path)
+
+    # Clean column names: lowercase
+    df.columns = [col.strip().lower() for col in df.columns]
+
+    # Check required columns
+    required_cols = ["province", "district", "subdistrict", "month", "year", "variable"]
+    for col in required_cols:
+        if col not in df.columns:
+            print(f"⚠ Missing column: {col} in {csv_file}")
+
+    # Parquet filename
+    parquet_path = csv_path.replace(".csv", ".parquet")
+
+    # Convert
+    table = pa.Table.from_pandas(df)
+    pq.write_table(table, parquet_path)
+
+print("🎉 All CSV converted to Parquet successfully")
