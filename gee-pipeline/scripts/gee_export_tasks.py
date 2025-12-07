@@ -4,9 +4,9 @@ import os
 import time
 from datetime import datetime
 
-# ---------------------------------------------------------
-# Load service account & initialize Earth Engine
-# ---------------------------------------------------------
+# -----------------------------
+# Load service account
+# -----------------------------
 SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
@@ -16,16 +16,16 @@ with open(KEYFILE, "r") as f:
 credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
 ee.Initialize(credentials)
 
-# ---------------------------------------------------------
+# -----------------------------
 # Load geometry
-# ---------------------------------------------------------
+# -----------------------------
 TAMBON = ee.FeatureCollection(
     "projects/geo-analysis-472713/assets/Provinces"
 )
 
-# ---------------------------------------------------------
+# -----------------------------
 # Config
-# ---------------------------------------------------------
+# -----------------------------
 RAW_OUTPUT = "raw_export"
 BATCH_SIZE = 20
 
@@ -33,9 +33,9 @@ CURRENT_YEAR = datetime.now().year
 YEARS = list(range(2015, CURRENT_YEAR + 1))
 MONTHS = list(range(1, 13))
 
-# ---------------------------------------------------------
-# Dataset configuration
-# ---------------------------------------------------------
+# -----------------------------
+# Dataset definitions
+# -----------------------------
 DATASETS = {
     "NDVI": {
         "ic": "MODIS/061/MOD13Q1",
@@ -55,7 +55,7 @@ DATASETS = {
         "reducer": ee.Reducer.sum(),
         "band": "precipitation",
     },
-    "SoilMoisture": {
+    "SoilMoisture": {  
         "ic": "NASA/SMAP/SPL4SMGP/007",
         "scale": 10000,
         "reducer": ee.Reducer.mean(),
@@ -64,69 +64,59 @@ DATASETS = {
     "FireCount": {
         "ic": "MODIS/061/MOD14A1",
         "scale": 1000,
+        "reducer": ee.Reducer.sum(),
         "band": "FireMask",
     },
 }
 
-# ---------------------------------------------------------
+# -----------------------------
 # Helper for monthly interval
-# ---------------------------------------------------------
+# -----------------------------
 def month_filter(year, month):
     start = ee.Date.fromYMD(year, month, 1)
     end = start.advance(1, "month")
     return start, end
 
-# ---------------------------------------------------------
-# Special case for FireCount (HIGH CONFIDENCE ONLY = 9)
-# ---------------------------------------------------------
-def compute_firecount(ic):
-    # FireMask high-confidence = 9
-    fire = ic.select("FireMask") \
-             .map(lambda img: img.eq(9).rename("FirePix"))
+# -----------------------------
+# Pre-processing for FireCount
+# -----------------------------
+def prepare_fire_mask(image):
+    """
+    FireMask band: 
+      7 = high-confidence fire
+    """
+    mask = image.select("FireMask").eq(7)  # keep only high-confidence fire pixels
+    return mask.rename("FireMask")
 
-    return fire.sum().rename("FireCount")
-
-# ---------------------------------------------------------
-# Export function per month per variable
-# ---------------------------------------------------------
+# -----------------------------
+# Export one month of one variable
+# -----------------------------
 def export_month(year, month, variable, spec):
+    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
 
-    start, end = month_filter(year, month)
-    ic = ee.ImageCollection(spec["ic"]).filterDate(start, end)
+    band = spec["band"]
+    scale = spec["scale"]
+    reducer = spec["reducer"]
 
-    # -----------------------------
-    # Handle FireCount separately
-    # -----------------------------
+    # Special case: FireCount
     if variable == "FireCount":
-        img = compute_firecount(ic)
-        reducer = ee.Reducer.sum()
-        band_name = "FireCount"
-
+        ic = ic.map(prepare_fire_mask)
+        img = ic.select("FireMask").sum()
     else:
-        band_name = spec["band"]
-        reducer = spec["reducer"]
-        img = ic.select(band_name).mean()
+        img = ic.select(band).mean() if reducer == ee.Reducer.mean() else ic.select(band).sum()
 
-    # -----------------------------
-    # Zonal statistics
-    # -----------------------------
     zonal = img.reduceRegions(
         collection=TAMBON,
         reducer=reducer,
-        scale=spec["scale"],
-        tileScale=4
+        scale=scale,
     )
 
-    # Add metadata
     zonal = zonal.map(lambda f: f.set({
         "year": year,
         "month": month,
-        "variable": variable
+        "variable": variable,
     }))
 
-    # -----------------------------
-    # Export to Cloud Storage
-    # -----------------------------
     filename = f"{variable}_{year}_{month:02d}"
 
     task = ee.batch.Export.table.toCloudStorage(
@@ -136,35 +126,33 @@ def export_month(year, month, variable, spec):
         fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
         fileFormat="GeoJSON",
     )
-
     task.start()
     return task
 
-# ---------------------------------------------------------
-# Run all exports
-# ---------------------------------------------------------
+# -----------------------------
+# Batch runner
+# -----------------------------
 def run_all_exports():
     all_tasks = []
     count = 0
 
-    for variable, spec in DATASETS.items():
+    for var, spec in DATASETS.items():
         for y in YEARS:
             for m in MONTHS:
-                print(f"Submitting task → {variable} {y}-{m:02d}")
-                task = export_month(y, m, variable, spec)
+                task = export_month(y, m, var, spec)
                 all_tasks.append(task)
                 count += 1
 
                 if count % BATCH_SIZE == 0:
-                    print(f"⏳ Waiting for Earth Engine (batch {count})…")
+                    print(f"⏳ Waiting for GEE… batch {count} submitted")
                     time.sleep(25)
 
     print(f"🎉 All {len(all_tasks)} tasks submitted.")
     return all_tasks
 
-# ---------------------------------------------------------
-# Main
-# ---------------------------------------------------------
+# -----------------------------
+# Run script
+# -----------------------------
 if __name__ == "__main__":
-    print("🚀 Starting GEE export for NDVI + LST + FireCount + Rainfall + SoilMoisture")
+    print("🚀 Starting GEE exports (All datasets)…")
     run_all_exports()
