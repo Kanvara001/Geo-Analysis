@@ -77,12 +77,12 @@ def month_filter(year, month):
     return start, end
 
 # ---------------------------------------------------------
-# Special case for FireCount (count fire pixels)
+# Special case for FireCount (HIGH CONFIDENCE ONLY = 9)
 # ---------------------------------------------------------
 def compute_firecount(ic):
-    # FireMask: fire pixels = 7,8,9
+    # FireMask high-confidence = 9
     fire = ic.select("FireMask") \
-             .map(lambda img: img.eq(7).Or(img.eq(8)).Or(img.eq(9)).rename("FirePix"))
+             .map(lambda img: img.eq(9).rename("FirePix"))
 
     return fire.sum().rename("FireCount")
 
@@ -95,7 +95,7 @@ def export_month(year, month, variable, spec):
     ic = ee.ImageCollection(spec["ic"]).filterDate(start, end)
 
     # -----------------------------
-    # Handle each variable separately
+    # Handle FireCount separately
     # -----------------------------
     if variable == "FireCount":
         img = compute_firecount(ic)
@@ -114,10 +114,10 @@ def export_month(year, month, variable, spec):
         collection=TAMBON,
         reducer=reducer,
         scale=spec["scale"],
-        tileScale=4                      # prevent memory error
+        tileScale=4
     )
 
-    # Attach metadata to each feature
+    # Add metadata
     zonal = zonal.map(lambda f: f.set({
         "year": year,
         "month": month,
@@ -125,7 +125,7 @@ def export_month(year, month, variable, spec):
     }))
 
     # -----------------------------
-    # Export task
+    # Export to Cloud Storage
     # -----------------------------
     filename = f"{variable}_{year}_{month:02d}"
 
