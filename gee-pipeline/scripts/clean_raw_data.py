@@ -27,7 +27,7 @@ LONG_GAP_THRESHOLD = {
 VALUE_COL = {
     "NDVI": "mean",
     "LST": "mean",
-    "Rainfall": "mean",
+    "Rainfall": "sum",
     "SoilMoisture": "mean",
     "FireCount": "sum",
 }
