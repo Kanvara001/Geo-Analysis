@@ -34,17 +34,19 @@ jobs:
         echo "----- JSON END -----"
 
     # --------------------------------------------------------
-    # 🚫 Export step ไม่ต้องรันแล้ว
+    # ✅ Run Export Script (GEE → GCS)
     # --------------------------------------------------------
-    # - name: Run Export Script (GEE to GCS)
-    #   env:
-    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #   run: |
-    #     python gee-pipeline/scripts/gee_export_tasks.py
-    # --------------------------------------------------------
+    - name: Run Export Script (GEE to GCS)
+      env:
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+        GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+      run: |
+        python gee-pipeline/scripts/gee_export_tasks.py
 
+    # --------------------------------------------------------
+    # ✅ Poll + Download + Convert (GCS → Parquet)
+    # --------------------------------------------------------
     - name: Download from GCS & Convert to Parquet
       env:
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
@@ -60,10 +62,16 @@ jobs:
         echo "Listing local_raw"
         ls -R local_raw || echo "not found"
 
+    # --------------------------------------------------------
+    # ✅ Clean parquet
+    # --------------------------------------------------------
     - name: Clean raw parquet
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
+    # --------------------------------------------------------
+    # ✅ Commit cleaned data to repo
+    # --------------------------------------------------------
     - name: Commit Cleaned Data to Repo
       run: |
         git config --global user.name "github-actions"
