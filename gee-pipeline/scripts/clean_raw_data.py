@@ -1,109 +1,154 @@
 import os
-import json
+import argparse
 import pandas as pd
-from datetime import datetime
-
-RAW_PARQUET_DIR = "gee-pipeline/raw_parquet"
-CLEAN_OUTPUT_DIR = "gee-pipeline/clean_parquet"
-
-os.makedirs(CLEAN_OUTPUT_DIR, exist_ok=True)
+import numpy as np
+import glob
 
 # -----------------------------
-# Helper: safe rename columns
+# Corrected RAW parquet path
 # -----------------------------
-COLUMN_MAP = {
-    "amphoe": "district",
-    "tambon": "subdistrict",
-    "district": "district",
-    "subdistrict": "subdistrict",
-    "province": "province",
+RAW_PARQUET_DIR = "gee-pipeline/outputs/raw_parquet"
+OUTPUT_CLEAN = "gee-pipeline/outputs/clean"
+
+os.makedirs(OUTPUT_CLEAN, exist_ok=True)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--var", type=str, help="Clean a specific variable only")
+args = parser.parse_args()
+
+
+# ---------------------------------------------------------
+# VALID VARIABLES (exactly match what GeoJSON produces)
+# ---------------------------------------------------------
+LONG_GAP_THRESHOLD = {
+    "NDVI": 2,
+    "LST": 2,
+    "SoilMoisture": 2,
+    "Rainfall": 2,
+    "FireCount": 2,
 }
 
-def normalize_columns(df):
-    df = df.rename(columns={c: COLUMN_MAP.get(c, c) for c in df.columns})
-    return df
+VALUE_COL = {
+    "NDVI": "mean",
+    "LST": "mean",
+    "SoilMoisture": "mean",
+    "Rainfall": "sum",       # CHIRPS daily aggregated monthly → sum
+    "FireCount": "sum",      # fire pixels counted
+}
 
-# -----------------------------
-# Clean one variable
-# -----------------------------
+# ---------------------------------------------------------
+# Load all Parquet files
+# ---------------------------------------------------------
+print("🔧 Cleaning raw data…")
+
+if not os.path.exists(RAW_PARQUET_DIR):
+    raise FileNotFoundError(f"❌ RAW_PARQUET_DIR does not exist: {RAW_PARQUET_DIR}")
+
+files = [f for f in os.listdir(RAW_PARQUET_DIR) if f.endswith(".parquet")]
+
+if len(files) == 0:
+    raise RuntimeError("❌ No parquet files found in raw_parquet folder")
+
+dfs = [pd.read_parquet(os.path.join(RAW_PARQUET_DIR, f)) for f in files]
+df = pd.concat(dfs, ignore_index=True)
+
+# Normalize column names
+df.columns = [c.lower() for c in df.columns]
+
+# Optional filter
+if args.var:
+    df = df[df["variable"] == args.var]
+    if df.empty:
+        raise RuntimeError(f"❌ No data found for variable '{args.var}'")
+
+
+# ---------------------------------------------------------
+# Normalize "value" column
+# ---------------------------------------------------------
+def pick_value(row):
+    col = VALUE_COL[row["variable"]]
+    return row.get(col, np.nan)
+
+df["value"] = df.apply(pick_value, axis=1)
+
+# Create date column
+df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=1))
+
+
+# ---------------------------------------------------------
+# Make sure column exist (geometry removed earlier)
+# ---------------------------------------------------------
+REQUIRED = ["province", "amphoe", "tambon", "variable", "year", "month", "value"]
+
+missing = [c for c in REQUIRED if c not in df.columns]
+if missing:
+    raise RuntimeError(f"❌ Missing required columns: {missing}")
+
+
+# ---------------------------------------------------------
+# NDVI global climatology
+# ---------------------------------------------------------
+df_ndvi = df[df["variable"] == "NDVI"].copy()
+if not df_ndvi.empty:
+    global_climatology_NDVI = df_ndvi.groupby("month")["value"].mean()
+else:
+    global_climatology_NDVI = None
+
+
+# ---------------------------------------------------------
+# Clean per variable
+# ---------------------------------------------------------
 def clean_variable(df, var):
+
     temp = df[df["variable"] == var].copy()
-    if temp.empty:
-        print(f"⚠ No data for variable: {var}")
-        return None
+    temp = temp.sort_values(["province", "amphoe", "tambon", "date"])
 
-    # Normalize columns
-    temp = normalize_columns(temp)
+    groups_cleaned = []
 
-    # Make sure essential columns exist
-    for col in ["province", "district", "subdistrict"]:
-        if col not in temp.columns:
-            temp[col] = None
+    for (prov, amp, tam), g in temp.groupby(["province", "amphoe", "tambon"]):
 
-    # Create date column
-    temp["date"] = pd.to_datetime(
-        temp["year"].astype(str) + "-" + temp["month"].astype(str) + "-01"
-    )
+        full_range = pd.date_range(g["date"].min(), g["date"].max(), freq="MS")
+        g = g.set_index("date").reindex(full_range)
 
-    # Sort safely
-    sort_cols = [c for c in ["province", "district", "subdistrict", "date"] if c in temp.columns]
-    temp = temp.sort_values(sort_cols)
+        # Fill static metadata
+        g[["province", "amphoe", "tambon", "variable"]] = (
+            g[["province", "amphoe", "tambon", "variable"]].ffill().bfill()
+        )
 
-    # Rename the value column: always called "value"
-    if "mean" in temp.columns:
-        temp["value"] = temp["mean"]
-    elif "sum" in temp.columns:
-        temp["value"] = temp["sum"]
-    elif "FireMask" in temp.columns:
-        temp["value"] = temp["FireMask"]
-    else:
-        # fallback: numeric columns
-        numeric_cols = temp.select_dtypes(include="number").columns.tolist()
-        if "value" not in temp.columns and len(numeric_cols) > 0:
-            temp["value"] = temp[numeric_cols[0]]
+        s = pd.to_numeric(g["value"], errors="coerce")
 
-    # FireCount cleanup (convert >7 = fire pixel)
-    if var == "FireCount":
-        temp["value"] = temp["value"].apply(lambda x: 1 if x >= 7 else 0)
+        # Detect longest NA gap
+        is_na = s.isna()
+        groups = (is_na != is_na.shift()).cumsum()
+        longest_gap = is_na.astype(int).groupby(groups).sum().max()
 
-    # Keep only necessary fields
-    keep = ["province", "district", "subdistrict",
-            "year", "month", "date", "variable", "value"]
+        # Apply cleaning rules
+        if longest_gap < LONG_GAP_THRESHOLD[var]:
+            g["clean_value"] = s.interpolate()
 
-    keep = [c for c in keep if c in temp.columns]
-    temp = temp[keep]
+        else:
+            if var == "NDVI" and global_climatology_NDVI is not None:
+                climat = global_climatology_NDVI.reindex(g.index.month).values
+                g["clean_value"] = s.fillna(climat)
+            else:
+                monthly_mean = s.groupby(g.index.month).transform("mean")
+                g["clean_value"] = s.fillna(monthly_mean)
 
-    return temp
+        groups_cleaned.append(g.reset_index().rename(columns={"index": "date"}))
 
-# -----------------------------
-# Main
-# -----------------------------
-if __name__ == "__main__":
-    print("🔧 Cleaning raw data…")
+    return pd.concat(groups_cleaned)
 
-    # Load all parquet
-    files = [f for f in os.listdir(RAW_PARQUET_DIR) if f.endswith(".parquet")]
-    print(f"📦 Loaded {len(files)} parquet files")
 
-    dfs = []
-    for f in files:
-        dfs.append(pd.read_parquet(os.path.join(RAW_PARQUET_DIR, f)))
+# ---------------------------------------------------------
+# Loop through variables and save cleaned parquet
+# ---------------------------------------------------------
+for var in df["variable"].unique():
+    print(f"✨ Cleaning: {var}")
+    clean_df = clean_variable(df, var)
 
-    df = pd.concat(dfs, ignore_index=True)
-    print(f"📊 Total rows: {len(df):,}")
+    out_path = os.path.join(OUTPUT_CLEAN, f"{var}.parquet")
+    clean_df.to_parquet(out_path, index=False)
 
-    VARIABLES = df["variable"].unique()
+    print(f"✅ Cleaned {var} → {out_path}")
 
-    for var in VARIABLES:
-        print(f"\n✨ Cleaning variable: {var}")
-        cleaned = clean_variable(df, var)
-
-        if cleaned is None or cleaned.empty:
-            print(f"⚠ Skipped {var} (no data)")
-            continue
-
-        out_path = os.path.join(CLEAN_OUTPUT_DIR, f"{var}.parquet")
-        cleaned.to_parquet(out_path, index=False)
-        print(f"✅ Saved cleaned: {out_path} ({len(cleaned):,} rows)")
-
-    print("\n🎉 Finished cleaning all variables")
+print("🎉 All variables cleaned successfully!")
