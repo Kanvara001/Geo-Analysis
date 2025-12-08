@@ -47,20 +47,20 @@ jobs:
     # --------------------------------------------------------
     # ✅ Poll + Download + Convert (GCS → Parquet)
     # --------------------------------------------------------
-    - name: Download from GCS & Convert to Parquet
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: |
-        python gee-pipeline/scripts/poll_download_convert.py
+    # - name: Download from GCS & Convert to Parquet
+    #   env:
+    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    #   run: |
+    #     python gee-pipeline/scripts/poll_download_convert.py
 
-    - name: DEBUG — list files after convert
-      run: |
-        echo "Listing gee-pipeline/outputs/raw_parquet"
-        ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
+    # - name: DEBUG — list files after convert
+    #   run: |
+    #     echo "Listing gee-pipeline/outputs/raw_parquet"
+    #     ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
   
-        echo "Listing local_raw"
-        ls -R local_raw || echo "not found"
+    #     echo "Listing local_raw"
+    #     ls -R local_raw || echo "not found"
 
     # --------------------------------------------------------
     # ✅ Clean parquet
