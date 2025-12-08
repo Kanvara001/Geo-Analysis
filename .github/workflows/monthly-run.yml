@@ -62,26 +62,24 @@ jobs:
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
     
-    # --------------------------------------------------------
-    # 🔍 NEW — Search for all parquet files everywhere
-    # --------------------------------------------------------
-    - name: DEBUG — Search for Parquet files
+    - name: DEBUG — Check poll script prefix logic
+      env:
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
-        echo "🔍 Searching for .parquet files in repository..."
-        find . -type f -name "*.parquet" -print || echo "No parquet files found"
+        echo "🔍 Checking bucket file layout..."
+        gsutil ls gs://${GCS_BUCKET}/raw_export/** || echo "No files found in raw_export"
+        
+        echo "🔍 Checking NDVI directory"
+        gsutil ls gs://${GCS_BUCKET}/raw_export/NDVI/ || echo "No NDVI"
 
-        echo "📁 Listing key directories..."
-        echo "--- gee-pipeline ---"
-        ls -R gee-pipeline || echo "gee-pipeline not found"
+        echo "🔍 Checking SoilMoisture directory"
+        gsutil ls gs://${GCS_BUCKET}/raw_export/SoilMoisture/ || echo "No SoilMoisture"
 
-        echo "--- outputs ---"
-        ls -R gee-pipeline/outputs || echo "no outputs directory"
+        echo "🔍 Checking FireCount directory"
+        gsutil ls gs://${GCS_BUCKET}/raw_export/FireCount/ || echo "No FireCount"
 
-        echo "--- local_raw ---"
-        ls -R local_raw || echo "no local_raw directory"
-
-        echo "--- root directory ---"
-        ls -R . || true
+        echo "🔍 Checking LST directory"
+        gsutil ls gs://${GCS_BUCKET}/raw_export/LST/ || echo "No LST"
 
 
     # --------------------------------------------------------
