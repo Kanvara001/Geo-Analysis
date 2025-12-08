@@ -33,29 +33,19 @@ jobs:
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
 
+    # --------------------------------------------------------
+    # ✅ Run Export Script (GEE → GCS)
+    # --------------------------------------------------------
+    #- name: Run Export Script (GEE to GCS)
+    #  env:
+    #    SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+    #    GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+    #    GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #  run: |
+    #    python gee-pipeline/scripts/gee_export_tasks.py
 
     # --------------------------------------------------------
-    # 📂 NEW — List directory structure (ADD HERE)
-    # --------------------------------------------------------
-    - name: DEBUG — list gee-pipeline structure
-      run: |
-        echo "📂 Listing gee-pipeline directory"
-        ls -R gee-pipeline || echo "gee-pipeline not found"
-
-
-    # --------------------------------------------------------
-    # ⛔ Export disabled
-    # --------------------------------------------------------
-    # - name: Run Export Script (GEE to GCS)
-    #   env:
-    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-    #     GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
-    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #   run: |
-    #     python gee-pipeline/scripts/gee_export_tasks.py
-
-    # --------------------------------------------------------
-    # ⛔ Poll + convert disabled
+    # ✅ Poll + Download + Convert (GCS → Parquet)
     # --------------------------------------------------------
     # - name: Download from GCS & Convert to Parquet
     #   env:
@@ -68,34 +58,9 @@ jobs:
     #   run: |
     #     echo "Listing gee-pipeline/outputs/raw_parquet"
     #     ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
-    #
+  
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
-
-    # --------------------------------------------------------
-    # 📂 NEW — List directory structure
-    # --------------------------------------------------------
-    - name: DEBUG — list gee-pipeline structure
-      run: |
-        echo "📂 Listing gee-pipeline directory"
-        ls -R gee-pipeline || echo "gee-pipeline not found"
-
-    # --------------------------------------------------------
-    # 📂 NEW — Search for Parquet files everywhere
-    # --------------------------------------------------------
-    - name: DEBUG — Search for Parquet files
-      run: |
-        echo "🔍 Searching for all .parquet files in repository..."
-        find . -type f -name "*.parquet" -print || echo "No parquet found"
-
-        echo "📂 Listing gee-pipeline/outputs"
-        ls -R gee-pipeline/outputs || echo "gee-pipeline/outputs not found"
-
-        echo "📂 Listing gee-pipeline/outputs/raw_parquet"
-        ls -R gee-pipeline/outputs/raw_parquet || echo "gee-pipeline/outputs/raw_parquet not found"
-
-        echo "📂 Listing local_raw"
-        ls -R local_raw || echo "local_raw not found"
 
     # --------------------------------------------------------
     # ✅ Clean parquet
@@ -105,7 +70,7 @@ jobs:
         python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
-    # ✅ Commit cleaned data
+    # ✅ Commit cleaned data to repo
     # --------------------------------------------------------
     - name: Commit Cleaned Data to Repo
       run: |
@@ -114,4 +79,3 @@ jobs:
         git add gee-pipeline/outputs/clean/*
         git commit -m "Automated clean update" || echo "No changes to commit"
         git push
-
