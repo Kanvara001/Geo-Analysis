@@ -72,6 +72,30 @@ jobs:
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
 
+    # --------------------------------------------------------
+    # 📂 NEW — List directory structure
+    # --------------------------------------------------------
+    - name: DEBUG — list gee-pipeline structure
+      run: |
+        echo "📂 Listing gee-pipeline directory"
+        ls -R gee-pipeline || echo "gee-pipeline not found"
+
+    # --------------------------------------------------------
+    # 📂 NEW — Search for Parquet files everywhere
+    # --------------------------------------------------------
+    - name: DEBUG — Search for Parquet files
+      run: |
+        echo "🔍 Searching for all .parquet files in repository..."
+        find . -type f -name "*.parquet" -print || echo "No parquet found"
+
+        echo "📂 Listing gee-pipeline/outputs"
+        ls -R gee-pipeline/outputs || echo "gee-pipeline/outputs not found"
+
+        echo "📂 Listing gee-pipeline/outputs/raw_parquet"
+        ls -R gee-pipeline/outputs/raw_parquet || echo "gee-pipeline/outputs/raw_parquet not found"
+
+        echo "📂 Listing local_raw"
+        ls -R local_raw || echo "local_raw not found"
 
     # --------------------------------------------------------
     # ✅ Clean parquet
@@ -81,7 +105,7 @@ jobs:
         python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
-    # ✅ Commit cleaned data to repo
+    # ✅ Commit cleaned data
     # --------------------------------------------------------
     - name: Commit Cleaned Data to Repo
       run: |
@@ -90,3 +114,4 @@ jobs:
         git add gee-pipeline/outputs/clean/*
         git commit -m "Automated clean update" || echo "No changes to commit"
         git push
+
