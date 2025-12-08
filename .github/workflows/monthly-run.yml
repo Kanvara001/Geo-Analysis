@@ -33,19 +33,29 @@ jobs:
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
 
-    # --------------------------------------------------------
-    # ✅ Run Export Script (GEE → GCS)
-    # --------------------------------------------------------
-    #- name: Run Export Script (GEE to GCS)
-    #  env:
-    #    SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-    #    GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
-    #    GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #  run: |
-    #    python gee-pipeline/scripts/gee_export_tasks.py
 
     # --------------------------------------------------------
-    # ✅ Poll + Download + Convert (GCS → Parquet)
+    # 📂 NEW — List directory structure (ADD HERE)
+    # --------------------------------------------------------
+    - name: DEBUG — list gee-pipeline structure
+      run: |
+        echo "📂 Listing gee-pipeline directory"
+        ls -R gee-pipeline || echo "gee-pipeline not found"
+
+
+    # --------------------------------------------------------
+    # ⛔ Export disabled
+    # --------------------------------------------------------
+    # - name: Run Export Script (GEE to GCS)
+    #   env:
+    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+    #     GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #   run: |
+    #     python gee-pipeline/scripts/gee_export_tasks.py
+
+    # --------------------------------------------------------
+    # ⛔ Poll + convert disabled
     # --------------------------------------------------------
     # - name: Download from GCS & Convert to Parquet
     #   env:
@@ -58,9 +68,10 @@ jobs:
     #   run: |
     #     echo "Listing gee-pipeline/outputs/raw_parquet"
     #     ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
-  
+    #
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
+
 
     # --------------------------------------------------------
     # ✅ Clean parquet
