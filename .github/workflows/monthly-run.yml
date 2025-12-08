@@ -34,14 +34,22 @@ jobs:
         echo "----- JSON END -----"
 
     # --------------------------------------------------------
+    # 🔐 NEW — Activate service account BEFORE any gsutil
+    # --------------------------------------------------------
+    - name: Activate GCP Service Account
+      run: |
+        gcloud auth activate-service-account --key-file=gee-pipeline/service-key.json
+        gcloud config set project geo-analysis-472713
+
+    # --------------------------------------------------------
     # ✅ Run Export Script (GEE → GCS)
     # --------------------------------------------------------
-    #- name: Run Export Script (GEE to GCS)
-    #  env:
+    # - name: Run Export Script (GEE to GCS)
+    #   env:
     #    SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
     #    GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
     #    GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #  run: |
+    #   run: |
     #    python gee-pipeline/scripts/gee_export_tasks.py
 
     # --------------------------------------------------------
@@ -62,6 +70,9 @@ jobs:
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
     
+    # --------------------------------------------------------
+    # 🔍 Debug prefix check — now authenticated
+    # --------------------------------------------------------
     - name: DEBUG — Check poll script prefix logic
       env:
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
@@ -81,21 +92,20 @@ jobs:
         echo "🔍 Checking LST directory"
         gsutil ls gs://${GCS_BUCKET}/raw_export/LST/ || echo "No LST"
 
-
     # --------------------------------------------------------
     # ✅ Clean parquet
     # --------------------------------------------------------
-    - name: Clean raw parquet
-      run: |
-        python gee-pipeline/scripts/clean_raw_data.py
+    # - name: Clean raw parquet
+    #   run: |
+    #     python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
     # ✅ Commit cleaned data to repo
     # --------------------------------------------------------
-    - name: Commit Cleaned Data to Repo
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/clean/*
-        git commit -m "Automated clean update" || echo "No changes to commit"
-        git push
+    # - name: Commit Cleaned Data to Repo
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/clean/*
+    #     git commit -m "Automated clean update" || echo "No changes to commit"
+    #     git push
