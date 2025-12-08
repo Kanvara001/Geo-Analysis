@@ -33,18 +33,8 @@ jobs:
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
 
-
     # --------------------------------------------------------
-    # 📂 NEW — List directory structure (ADD HERE)
-    # --------------------------------------------------------
-    - name: DEBUG — list gee-pipeline structure
-      run: |
-        echo "📂 Listing gee-pipeline directory"
-        ls -R gee-pipeline || echo "gee-pipeline not found"
-
-
-    # --------------------------------------------------------
-    # ⛔ Export disabled
+    # ❌ Export script is disabled (you said no need)
     # --------------------------------------------------------
     # - name: Run Export Script (GEE to GCS)
     #   env:
@@ -55,7 +45,7 @@ jobs:
     #     python gee-pipeline/scripts/gee_export_tasks.py
 
     # --------------------------------------------------------
-    # ⛔ Poll + convert disabled
+    # ❌ Poll + Download disabled (you said no need)
     # --------------------------------------------------------
     # - name: Download from GCS & Convert to Parquet
     #   env:
@@ -68,13 +58,36 @@ jobs:
     #   run: |
     #     echo "Listing gee-pipeline/outputs/raw_parquet"
     #     ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
-    #
+  
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
 
+    # --------------------------------------------------------
+    # 🔍 DEBUG: Search for all parquet files in repo
+    # --------------------------------------------------------
+    - name: DEBUG — Search for all parquet files
+      run: |
+        echo "🔍 Searching for .parquet files in the repo…"
+        python - << 'EOF'
+import os
+root = "."
+found = []
+
+for dirpath, dirnames, filenames in os.walk(root):
+    for f in filenames:
+        if f.endswith(".parquet"):
+            full = os.path.join(dirpath, f)
+            found.append(full)
+            print("📦 Found:", full)
+
+if not found:
+    print("❌ No parquet files found anywhere.")
+else:
+    print("\n✅ Total parquet files found:", len(found))
+EOF
 
     # --------------------------------------------------------
-    # ✅ Clean parquet
+    # ✅ Clean raw parquet
     # --------------------------------------------------------
     - name: Clean raw parquet
       run: |
