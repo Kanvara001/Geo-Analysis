@@ -61,6 +61,28 @@ jobs:
   
     #     echo "Listing local_raw"
     #     ls -R local_raw || echo "not found"
+    
+    # --------------------------------------------------------
+    # 🔍 NEW — Search for all parquet files everywhere
+    # --------------------------------------------------------
+    - name: DEBUG — Search for Parquet files
+      run: |
+        echo "🔍 Searching for .parquet files in repository..."
+        find . -type f -name "*.parquet" -print || echo "No parquet files found"
+
+        echo "📁 Listing key directories..."
+        echo "--- gee-pipeline ---"
+        ls -R gee-pipeline || echo "gee-pipeline not found"
+
+        echo "--- outputs ---"
+        ls -R gee-pipeline/outputs || echo "no outputs directory"
+
+        echo "--- local_raw ---"
+        ls -R local_raw || echo "no local_raw directory"
+
+        echo "--- root directory ---"
+        ls -R . || true
+
 
     # --------------------------------------------------------
     # ✅ Clean parquet
