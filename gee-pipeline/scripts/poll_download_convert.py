@@ -41,9 +41,12 @@ bucket = client.bucket(bucket_name)
 print(f"📥 Downloading from bucket: {bucket_name}")
 
 # ----------------------------------------
-#   LIST FILES
+#   LIST FILES (UPDATED PREFIX)
 # ----------------------------------------
-blobs = list(bucket.list_blobs(prefix="export/"))
+print("🔎 Scanning bucket for GeoJSON files...")
+
+# 👇 ตรงกับ export prefix ใหม่
+blobs = list(bucket.list_blobs(prefix="raw_export/"))
 
 geojson_files = []
 
@@ -51,8 +54,12 @@ for blob in blobs:
     if not blob.name.endswith(".geojson"):
         continue
 
-    filename = os.path.basename(blob.name)
-    var = filename.split("_")[0].upper()  # Extract var from filename
+    # Extract variable name from folder structure: raw_export/NDVI/NDVI_2020_01.geojson
+    parts = blob.name.split("/")
+    if len(parts) < 3:
+        continue
+
+    var = parts[1].upper()    # folder name = variable
 
     if variable_filter and var != variable_filter:
         continue
@@ -67,7 +74,7 @@ print(f"🔎 Filtered for variable: {variable_filter} → {len(geojson_files)} f
 print(f"🔢 Limit = {limit}")
 
 if len(geojson_files) == 0:
-    print("⚠ No matching files found.")
+    print("⚠ No matching files found in raw_export/")
     exit()
 
 # ----------------------------------------
@@ -77,7 +84,6 @@ print("⬇ Downloading & converting to Parquet...")
 
 for blob in tqdm(geojson_files, desc="Processing"):
     filename = os.path.basename(blob.name)
-
     local_geojson_path = os.path.join(RAW_OUTPUT, filename)
     parquet_path = local_geojson_path.replace(".geojson", ".parquet")
 
@@ -87,17 +93,17 @@ for blob in tqdm(geojson_files, desc="Processing"):
     # ---- Convert GEOJSON → Parquet ----
     gdf = gpd.read_file(local_geojson_path)
 
-    # Drop geometry — keep only attributes
+    # Drop geometry — attributes only
     df = pd.DataFrame(gdf.drop(columns="geometry"))
 
-    # Ensure lower-case colnames
+    # lowercase columns
     df.columns = [c.lower() for c in df.columns]
 
     # Save parquet
     table = pa.Table.from_pandas(df)
     pq.write_table(table, parquet_path)
 
-    # Remove geojson after converting
+    # Remove original GeoJSON
     os.remove(local_geojson_path)
 
 print("🎉 Conversion complete!")
