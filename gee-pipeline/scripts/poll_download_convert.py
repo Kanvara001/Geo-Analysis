@@ -45,7 +45,6 @@ print(f"📥 Downloading from bucket: {bucket_name}")
 # ----------------------------------------
 print("🔎 Scanning bucket for GeoJSON files...")
 
-# 👇 ตรงกับ export prefix ใหม่
 blobs = list(bucket.list_blobs(prefix="raw_export/"))
 
 geojson_files = []
@@ -54,17 +53,17 @@ for blob in blobs:
     if not blob.name.endswith(".geojson"):
         continue
 
-    # Extract variable name from folder structure: raw_export/NDVI/NDVI_2020_01.geojson
+    # Extract variable name from folder structure
     parts = blob.name.split("/")
     if len(parts) < 3:
         continue
 
-    var = parts[1].upper()    # folder name = variable
+    var = parts[1].upper()
 
     if variable_filter and var != variable_filter:
         continue
 
-    geojson_files.append(blob)
+    geojson_files.append((blob, var))
 
 # Apply limit
 if limit:
@@ -78,44 +77,36 @@ if len(geojson_files) == 0:
     exit()
 
 # ----------------------------------------
-#   DOWNLOAD & CONVERT
+#   DOWNLOAD → CONVERT → UPLOAD BACK TO GCS
 # ----------------------------------------
-print("⬇ Downloading & converting to Parquet...")
+print("⬇ Downloading → 🔄 Converting → ⬆ Uploading Parquet to GCS")
 
-for blob in tqdm(geojson_files, desc="Processing"):
+for blob, var in tqdm(geojson_files, desc="Processing"):
     filename = os.path.basename(blob.name)
     local_geojson_path = os.path.join(RAW_OUTPUT, filename)
-    parquet_path = local_geojson_path.replace(".geojson", ".parquet")
+    parquet_filename = filename.replace(".geojson", ".parquet")
+    parquet_path = os.path.join(RAW_OUTPUT, parquet_filename)
 
     # ---- Download ----
     blob.download_to_filename(local_geojson_path)
 
     # ---- Convert GEOJSON → Parquet ----
     gdf = gpd.read_file(local_geojson_path)
-
-    # Drop geometry — attributes only
     df = pd.DataFrame(gdf.drop(columns="geometry"))
-
-    # lowercase columns
     df.columns = [c.lower() for c in df.columns]
 
-    # Save parquet
     table = pa.Table.from_pandas(df)
     pq.write_table(table, parquet_path)
 
-    # Remove original GeoJSON
+    # ---- Upload Parquet → GCS ----
+    gcs_output_path = f"parquet/{var}/{parquet_filename}"
+    out_blob = bucket.blob(gcs_output_path)
+    out_blob.upload_from_filename(parquet_path)
+
+    print(f"✔ Uploaded: gs://{bucket_name}/{gcs_output_path}")
+
+    # Clean local files
     os.remove(local_geojson_path)
+    os.remove(parquet_path)
 
-print("🎉 Conversion complete!")
-
-# ----------------------------------------
-#   VERIFY OUTPUT
-# ----------------------------------------
-parq_list = [f for f in os.listdir(RAW_OUTPUT) if f.endswith(".parquet")]
-
-print(f"📦 Parquet files generated: {len(parq_list)}")
-for p in parq_list:
-    print(" -", p)
-
-if len(parq_list) == 0:
-    raise RuntimeError("❌ No Parquet files were generated!")
+print("🎉 Conversion + Upload complete!")
