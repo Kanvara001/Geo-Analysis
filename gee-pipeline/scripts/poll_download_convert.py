@@ -82,15 +82,29 @@ if len(geojson_files) == 0:
 print("⬇ Downloading → 🔄 Converting → ⬆ Uploading Parquet to GCS")
 
 for blob, var in tqdm(geojson_files, desc="Processing"):
+
     filename = os.path.basename(blob.name)
-    local_geojson_path = os.path.join(RAW_OUTPUT, filename)
     parquet_filename = filename.replace(".geojson", ".parquet")
+    gcs_output_path = f"parquet/{var}/{parquet_filename}"
+
+    # ----------------------------------------
+    #   ⚡ SKIP IF ALREADY EXISTS ON GCS
+    # ----------------------------------------
+    if storage.Blob(bucket=bucket, name=gcs_output_path).exists(client):
+        print(f"\n⏭ SKIP (already exists): gs://{bucket_name}/{gcs_output_path}")
+        continue
+
+    # ----------------------------------------
+    #   DOWNLOAD RAW GEOJSON
+    # ----------------------------------------
+    local_geojson_path = os.path.join(RAW_OUTPUT, filename)
     parquet_path = os.path.join(RAW_OUTPUT, parquet_filename)
 
-    # ---- Download ----
     blob.download_to_filename(local_geojson_path)
 
-    # ---- Convert GEOJSON → Parquet ----
+    # ----------------------------------------
+    #   CONVERT GEOJSON → PARQUET
+    # ----------------------------------------
     gdf = gpd.read_file(local_geojson_path)
     df = pd.DataFrame(gdf.drop(columns="geometry"))
     df.columns = [c.lower() for c in df.columns]
@@ -98,15 +112,16 @@ for blob, var in tqdm(geojson_files, desc="Processing"):
     table = pa.Table.from_pandas(df)
     pq.write_table(table, parquet_path)
 
-    # ---- Upload Parquet → GCS ----
-    gcs_output_path = f"parquet/{var}/{parquet_filename}"
+    # ----------------------------------------
+    #   UPLOAD PARQUET → GCS
+    # ----------------------------------------
     out_blob = bucket.blob(gcs_output_path)
     out_blob.upload_from_filename(parquet_path)
 
-    print(f"✔ Uploaded: gs://{bucket_name}/{gcs_output_path}")
+    print(f"\n✔ Uploaded: gs://{bucket_name}/{gcs_output_path}")
 
     # Clean local files
     os.remove(local_geojson_path)
     os.remove(parquet_path)
 
-print("🎉 Conversion + Upload complete!")
+print("🎉 Conversion + Upload complete (with skip for existing files)!")
