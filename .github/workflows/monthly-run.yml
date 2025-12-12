@@ -33,70 +33,53 @@ jobs:
         cat gee-pipeline/service-key.json
         echo "----- JSON END -----"
 
-
     # --------------------------------------------------------
-    # 🔐 Authenticate — FIXED version (no project switch)
+    # 🔐 Authenticate
     # --------------------------------------------------------
-    - name: Authenticate Service Account (No Project Switching)
+    - name: Authenticate Service Account
       run: |
         export GOOGLE_APPLICATION_CREDENTIALS=gee-pipeline/service-key.json
         gcloud auth activate-service-account --key-file=gee-pipeline/service-key.json
 
-
     # --------------------------------------------------------
-    # ✅ Run Export Script (GEE → GCS)
+    # 📥 Poll + Download + Convert
     # --------------------------------------------------------
-    # - name: Run Export Script (GEE to GCS)
+    # - name: Download from GCS & Convert to Parquet
     #   env:
-    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-    #     GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
     #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
     #   run: |
-    #     python gee-pipeline/scripts/gee_export_tasks.py
+    #     python gee-pipeline/scripts/poll_download_convert.py
 
+    # - name: DEBUG — list files after convert
+    #   run: |
+    #     echo "Listing gee-pipeline/outputs/raw_parquet"
+    #     ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
 
-    # --------------------------------------------------------
-    # ✅ Poll + Download + Convert (GCS → Parquet)
-    # --------------------------------------------------------
-    - name: Download from GCS & Convert to Parquet
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: |
-        python gee-pipeline/scripts/poll_download_convert.py
-
-
-    - name: DEBUG — list files after convert
-      run: |
-        echo "Listing gee-pipeline/outputs/raw_parquet"
-        ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
-
-        echo "Listing local_raw"
-        ls -R local_raw || echo "not found"
-
+    #     echo "Listing local_raw"
+    #     ls -R local_raw || echo "not found"
 
     # --------------------------------------------------------
-    # 🔍 DEBUG — Check prefix/filter in bucket
+    # 🧪 DEBUG bucket structure
     # --------------------------------------------------------
-    - name: DEBUG — Check poll script prefix logic
-      env:
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: |
-        echo "🔍 Checking bucket file layout..."
-        gsutil ls gs://${GCS_BUCKET}/raw_export/** || echo "No files found in raw_export"
+    # - name: DEBUG — Check poll script prefix logic
+    #   env:
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    #   run: |
+    #     echo "🔍 Checking bucket file layout..."
+    #     gsutil ls gs://${GCS_BUCKET}/raw_export/** || echo "No files found in raw_export"
         
-        echo "🔍 Checking NDVI directory"
-        gsutil ls gs://${GCS_BUCKET}/raw_export/NDVI/ || echo "No NDVI"
+    #     echo "🔍 Checking NDVI directory"
+    #     gsutil ls gs://${GCS_BUCKET}/raw_export/NDVI/ || echo "No NDVI"
 
-        echo "🔍 Checking SoilMoisture directory"
-        gsutil ls gs://${GCS_BUCKET}/raw_export/SoilMoisture/ || echo "No SoilMoisture"
+    #     echo "🔍 Checking SoilMoisture directory"
+    #     gsutil ls gs://${GCS_BUCKET}/raw_export/SoilMoisture/ || echo "No SoilMoisture"
 
-        echo "🔍 Checking FireCount directory"
-        gsutil ls gs://${GCS_BUCKET}/raw_export/FireCount/ || echo "No FireCount"
+    #     echo "🔍 Checking FireCount directory"
+    #     gsutil ls gs://${GCS_BUCKET}/raw_export/FireCount/ || echo "No FireCount"
 
-        echo "🔍 Checking LST directory"
-        gsutil ls gs://${GCS_BUCKET}/raw_export/LST/ || echo "No LST"
-
+    #     echo "🔍 Checking LST directory"
+    #     gsutil ls gs://${GCS_BUCKET}/raw_export/LST/ || echo "No LST"
 
     # --------------------------------------------------------
     # 🧹 Clean parquet
@@ -105,14 +88,22 @@ jobs:
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
+    # --------------------------------------------------------
+    # 🔗 Merge all cleaned parquet → 1 file
+    # --------------------------------------------------------
+    - name: Merge cleaned parquet
+      run: |
+        python gee-pipeline/scripts/merge_cleaned.py
 
     # --------------------------------------------------------
-    # 💾 Commit cleaned data
+    # 💾 Commit cleaned + merged data
     # --------------------------------------------------------
-    - name: Commit Cleaned Data to Repo
+    - name: Commit Cleaned + Merged Data to Repo
       run: |
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
         git add gee-pipeline/outputs/clean/*
-        git commit -m "Automated clean update" || echo "No changes to commit"
+        git add gee-pipeline/outputs/merged/*
+        git commit -m "Automated clean + merge update" || echo "No changes to commit"
         git push
+
