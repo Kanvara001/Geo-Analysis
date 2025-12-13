@@ -95,6 +95,10 @@ jobs:
       run: |
         python gee-pipeline/scripts/merge_cleaned.py
 
+    - name: DEBUG — Check merged output
+      run: |
+        ls -lh gee-pipeline/outputs/merged
+
     # --------------------------------------------------------
     # 💾 Commit cleaned + merged data
     # --------------------------------------------------------
