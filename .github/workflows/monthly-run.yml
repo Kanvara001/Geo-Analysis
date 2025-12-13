@@ -27,12 +27,6 @@ jobs:
       run: |
         echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    - name: DEBUG — Show generated JSON
-      run: |
-        echo "----- JSON START -----"
-        cat gee-pipeline/service-key.json
-        echo "----- JSON END -----"
-
     # --------------------------------------------------------
     # 🔐 Authenticate
     # --------------------------------------------------------
@@ -40,58 +34,35 @@ jobs:
       run: |
         export GOOGLE_APPLICATION_CREDENTIALS=gee-pipeline/service-key.json
         gcloud auth activate-service-account --key-file=gee-pipeline/service-key.json
-        
+
     # --------------------------------------------------------
-    # ✅ Run Export Script (GEE → GCS)
+    # ❌ GEE Export (ไม่รัน)
     # --------------------------------------------------------
     # - name: Run Export Script (GEE to GCS)
-    #   env:
-    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-    #     GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
-    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
     #   run: |
     #     python gee-pipeline/scripts/gee_export_tasks.py
 
-
     # --------------------------------------------------------
-    # 📥 Poll + Download + Convert
+    # ❌ Poll + Download + Convert (ไม่รัน)
     # --------------------------------------------------------
     # - name: Download from GCS & Convert to Parquet
-    #   env:
-    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
     #   run: |
     #     python gee-pipeline/scripts/poll_download_convert.py
 
-    # - name: DEBUG — list files after convert
-    #   run: |
-    #     echo "Listing gee-pipeline/outputs/raw_parquet"
-    #     ls -R gee-pipeline/outputs/raw_parquet || echo "not found"
-
-    #     echo "Listing local_raw"
-    #     ls -R local_raw || echo "not found"
-
     # --------------------------------------------------------
-    # 🧪 DEBUG bucket structure
+    # 📥 DOWNLOAD parquet ที่มีอยู่แล้วจาก GCS
     # --------------------------------------------------------
-    # - name: DEBUG — Check poll script prefix logic
-    #   env:
-    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-    #   run: |
-    #     echo "🔍 Checking bucket file layout..."
-    #     gsutil ls gs://${GCS_BUCKET}/raw_export/** || echo "No files found in raw_export"
-        
-    #     echo "🔍 Checking NDVI directory"
-    #     gsutil ls gs://${GCS_BUCKET}/raw_export/NDVI/ || echo "No NDVI"
+    - name: Download parquet from GCS
+      env:
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+      run: |
+        echo "📥 Downloading parquet from GCS/parquet/"
+        mkdir -p gee-pipeline/outputs/raw_parquet
+        gsutil -m cp -r gs://${GCS_BUCKET}/parquet/* gee-pipeline/outputs/raw_parquet/
 
-    #     echo "🔍 Checking SoilMoisture directory"
-    #     gsutil ls gs://${GCS_BUCKET}/raw_export/SoilMoisture/ || echo "No SoilMoisture"
-
-    #     echo "🔍 Checking FireCount directory"
-    #     gsutil ls gs://${GCS_BUCKET}/raw_export/FireCount/ || echo "No FireCount"
-
-    #     echo "🔍 Checking LST directory"
-    #     gsutil ls gs://${GCS_BUCKET}/raw_export/LST/ || echo "No LST"
+    - name: DEBUG — list raw_parquet
+      run: |
+        ls -R gee-pipeline/outputs/raw_parquet
 
     # --------------------------------------------------------
     # 🧹 Clean parquet
@@ -101,7 +72,7 @@ jobs:
         python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
-    # 🔗 Merge all cleaned parquet → 1 file
+    # 🔗 Merge cleaned parquet
     # --------------------------------------------------------
     - name: Merge cleaned parquet
       run: |
@@ -112,7 +83,7 @@ jobs:
         ls -lh gee-pipeline/outputs/merged
 
     # --------------------------------------------------------
-    # 💾 Commit cleaned + merged data
+    # 💾 Commit cleaned + merged parquet
     # --------------------------------------------------------
     - name: Commit Cleaned + Merged Data to Repo
       run: |
@@ -122,4 +93,3 @@ jobs:
         git add gee-pipeline/outputs/merged/*
         git commit -m "Automated clean + merge update" || echo "No changes to commit"
         git push
-
