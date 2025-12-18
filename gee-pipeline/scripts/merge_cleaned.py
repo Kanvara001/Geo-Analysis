@@ -12,9 +12,9 @@ os.makedirs(OUTPUT_MERGED, exist_ok=True)
 print("🔗 Merging cleaned parquet files...")
 
 # --------------------------------------------------
-# Merge keys (ยึด district / subdistrict ตามเดิม)
+# Merge keys (ยึด schema จริงจาก GEE)
 # --------------------------------------------------
-KEYS = ["province", "district", "subdistrict", "year", "month"]
+KEYS = ["province", "district", "subdistric", "year", "month"]
 
 # --------------------------------------------------
 # Load cleaned parquet files (recursive)
@@ -31,15 +31,13 @@ if not parquet_files:
 dfs = []
 
 for f in parquet_files:
+    print(f"📥 Loading {f}")
     df = pd.read_parquet(f)
 
-    # 🔧 สำคัญที่สุด: reset index ก่อน
-    df = df.reset_index(drop=False)
-
-    # 🔒 ensure merge keys exist
-    for k in KEYS:
-        if k not in df.columns:
-            df[k] = pd.NA
+    # ตรวจ schema ขั้นต่ำ
+    missing = [k for k in KEYS if k not in df.columns]
+    if missing:
+        raise RuntimeError(f"❌ {f} missing columns: {missing}")
 
     dfs.append(df)
 
