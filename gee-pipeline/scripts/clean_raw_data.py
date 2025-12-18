@@ -1,63 +1,110 @@
-import os
-from pathlib import Path
 import pandas as pd
+import numpy as np
+from pathlib import Path
 
-# --------------------------------------------------
-# Paths
-# --------------------------------------------------
 RAW_PARQUET_DIR = Path("gee-pipeline/outputs/raw_parquet")
 CLEAN_DIR = Path("gee-pipeline/outputs/clean")
+THRESHOLD = 2  # months
 
-print("🔧 Cleaning raw data…")
+KEYS = ["province", "district", "subdistric", "year", "month"]
 
-# --------------------------------------------------
-# Check raw parquet directory
-# --------------------------------------------------
-if not RAW_PARQUET_DIR.exists():
-    raise FileNotFoundError(f"❌ RAW_PARQUET_DIR not found: {RAW_PARQUET_DIR}")
+print("🔧 Cleaning raw data...")
 
 # --------------------------------------------------
-# Find parquet files (recursive)
+# Helper functions
+# --------------------------------------------------
+def apply_iqr(series):
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    return series.where(series.between(lower, upper))
+
+def fill_missing_by_gap(df, value_col):
+    df = df.sort_values(["year", "month"]).reset_index(drop=True)
+
+    is_na = df[value_col].isna()
+    groups = (is_na != is_na.shift()).cumsum()
+
+    for _, g in df.groupby(groups):
+        if g[value_col].isna().all():
+            if len(g) < THRESHOLD:
+                df.loc[g.index, value_col] = df[value_col].interpolate()
+            else:
+                month = g["month"].iloc[0]
+                climatology = df.loc[
+                    (df["month"] == month) & df[value_col].notna(),
+                    value_col
+                ].mean()
+                df.loc[g.index, value_col] = climatology
+    return df
+
+# --------------------------------------------------
+# Load files
 # --------------------------------------------------
 parquet_files = list(RAW_PARQUET_DIR.rglob("*.parquet"))
-
 if not parquet_files:
-    raise RuntimeError("❌ No parquet files found in raw_parquet")
+    raise RuntimeError("❌ No raw parquet files found")
 
-print(f"📦 Found {len(parquet_files)} parquet files")
+print(f"📦 Found {len(parquet_files)} files")
 
-# --------------------------------------------------
-# Create clean output directory
-# --------------------------------------------------
-CLEAN_DIR.mkdir(parents=True, exist_ok=True)
+for pq in parquet_files:
+    variable = pq.parent.name.upper()
+    print(f"🧹 Cleaning {variable} → {pq.name}")
 
-# --------------------------------------------------
-# Clean each parquet file
-# --------------------------------------------------
-for pq_file in parquet_files:
-    variable = pq_file.parent.name.upper()
-    print(f"🧹 Cleaning {variable} → {pq_file.name}")
-
-    df = pd.read_parquet(pq_file)
+    df = pd.read_parquet(pq)
 
     # --------------------------------------------------
-    # Rename value column → variable name
+    # Normalize schema
     # --------------------------------------------------
-    key_cols = ["province", "district", "subdistric", "year", "month"]
-    value_cols = [c for c in df.columns if c not in key_cols]
+    df = df[[c for c in df.columns if c not in ["id", "variable"]]]
 
-    if len(value_cols) == 1:
-        df = df.rename(columns={value_cols[0]: variable})
-    else:
-        print(f"⚠️  Warning: {pq_file.name} has multiple value columns: {value_cols}")
+    value_cols = [c for c in df.columns if c not in KEYS]
+    if len(value_cols) != 1:
+        print(f"⚠️ Skip {pq.name}, ambiguous value columns: {value_cols}")
+        continue
+
+    value_col = value_cols[0]
+    df = df.rename(columns={value_col: variable})
 
     # --------------------------------------------------
-    # Save cleaned parquet (by variable)
+    # Variable-specific cleaning
     # --------------------------------------------------
-    output_dir = CLEAN_DIR / variable
-    output_dir.mkdir(exist_ok=True)
+    if variable == "LST":
+        df[variable] = df[variable] / 1000  # ✅ SCALE
+        df.loc[(df[variable] < 5) | (df[variable] > 55), variable] = np.nan
 
-    output_path = output_dir / pq_file.name
-    df.to_parquet(output_path, index=False)
+    elif variable == "NDVI":
+        df.loc[(df[variable] < -0.2) | (df[variable] > 1.0), variable] = np.nan
 
-print("✅ Cleaning completed successfully!")
+    elif variable == "SOILMOISTURE":
+        df.loc[(df[variable] < 0) | (df[variable] > 1), variable] = np.nan
+
+    elif variable == "RAINFALL":
+        df.loc[df[variable] < 0, variable] = np.nan
+
+    elif variable == "FIRECOUNT":
+        df.loc[df[variable] < 0, variable] = np.nan
+
+    # --------------------------------------------------
+    # IQR outlier
+    # --------------------------------------------------
+    df[variable] = apply_iqr(df[variable])
+
+    # --------------------------------------------------
+    # Missing gap handling (by area)
+    # --------------------------------------------------
+    df = (
+        df.groupby(["province", "district", "subdistric"], group_keys=False)
+        .apply(lambda g: fill_missing_by_gap(g, variable))
+    )
+
+    # --------------------------------------------------
+    # Save
+    # --------------------------------------------------
+    out_dir = CLEAN_DIR / variable
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / pq.name, index=False)
+
+print("✅ Cleaning completed successfully")
