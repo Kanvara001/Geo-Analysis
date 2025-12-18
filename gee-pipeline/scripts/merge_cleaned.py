@@ -17,10 +17,9 @@ print("🔗 Merging cleaned parquet files...")
 KEYS = ["province", "district", "subdistrict", "year", "month"]
 
 # --------------------------------------------------
-# Load cleaned files (recursive)
+# Load cleaned parquet files (recursive)
 # --------------------------------------------------
 parquet_files = []
-
 for root, _, files in os.walk(CLEAN_DIR):
     for f in files:
         if f.endswith(".parquet"):
@@ -34,7 +33,10 @@ dfs = []
 for f in parquet_files:
     df = pd.read_parquet(f)
 
-    # 🔒 ensure all merge keys exist
+    # 🔧 สำคัญที่สุด: reset index ก่อน
+    df = df.reset_index(drop=False)
+
+    # 🔒 ensure merge keys exist
     for k in KEYS:
         if k not in df.columns:
             df[k] = pd.NA
