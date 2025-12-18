@@ -70,6 +70,7 @@ jobs:
     - name: Check parquet schema
       run: |
         python gee-pipeline/scripts/check_schema.py
+        --path gee-pipeline/outputs/raw_parquet
 
     # --------------------------------------------------------
     # 🧹 Clean parquet
@@ -77,6 +78,13 @@ jobs:
     - name: Clean raw parquet
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
+    # --------------------------------------------------------
+    # 🔍 Check CLEAN schema
+    # --------------------------------------------------------
+    - name: Check CLEAN parquet schema
+      run: |
+        python gee-pipeline/scripts/check_schema.py \
+        --path gee-pipeline/outputs/clean
 
     # --------------------------------------------------------
     # 🔗 Merge cleaned parquet
