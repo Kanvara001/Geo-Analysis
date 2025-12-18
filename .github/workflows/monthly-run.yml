@@ -50,7 +50,7 @@ jobs:
     #     python gee-pipeline/scripts/poll_download_convert.py
 
     # --------------------------------------------------------
-    # 📥 DOWNLOAD parquet ที่มีอยู่แล้วจาก GCS
+    # 📥 DOWNLOAD parquet จาก GCS
     # --------------------------------------------------------
     - name: Download parquet from GCS
       env:
@@ -63,31 +63,27 @@ jobs:
     - name: DEBUG — list raw_parquet
       run: |
         ls -R gee-pipeline/outputs/raw_parquet
-        
-    # --------------------------------------------------------
-    # 🧪 CHECK schema (ก่อน clean)
-    # --------------------------------------------------------
-    # - name: Check parquet schema
-    #   run: |
-    #     python gee-pipeline/scripts/check_schema.py
-    #     --path gee-pipeline/outputs/raw_parquet
 
     # --------------------------------------------------------
-    # 🧹 Clean parquet
+    # 🧹 Clean raw parquet
     # --------------------------------------------------------
     - name: Clean raw parquet
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
-    # # --------------------------------------------------------
-    # # 🔍 Check CLEAN schema
-    # # --------------------------------------------------------
-    # - name: Check CLEAN parquet schema
-    #   run: |
-    #     python gee-pipeline/scripts/check_schema.py \
-    #     --path gee-pipeline/outputs/clean
 
     # --------------------------------------------------------
-    # 🔗 Merge cleaned parquet
+    # 💾 COMMIT CLEAN (สำคัญมาก)
+    # --------------------------------------------------------
+    - name: Commit CLEAN parquet
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add gee-pipeline/outputs/clean/*
+        git commit -m "Automated clean parquet update" || echo "No clean changes to commit"
+        git push
+
+    # --------------------------------------------------------
+    # 🔗 Merge cleaned parquet (หลัง clean ถูก commit แล้ว)
     # --------------------------------------------------------
     - name: Merge cleaned parquet
       run: |
@@ -98,13 +94,12 @@ jobs:
         ls -lh gee-pipeline/outputs/merged
 
     # --------------------------------------------------------
-    # 💾 Commit cleaned + merged parquet
+    # 💾 COMMIT MERGED
     # --------------------------------------------------------
-    - name: Commit Cleaned + Merged Data to Repo
+    - name: Commit MERGED parquet
       run: |
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/clean/*
         git add gee-pipeline/outputs/merged/*
-        git commit -m "Automated clean + merge update" || echo "No changes to commit"
+        git commit -m "Automated merged parquet update" || echo "No merged changes to commit"
         git push
