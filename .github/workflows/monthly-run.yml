@@ -63,6 +63,13 @@ jobs:
     - name: DEBUG — list raw_parquet
       run: |
         ls -R gee-pipeline/outputs/raw_parquet
+        
+    # --------------------------------------------------------
+    # 🧪 CHECK schema (ก่อน clean)
+    # --------------------------------------------------------
+    - name: Check parquet schema
+      run: |
+        python gee-pipeline/scripts/check_schema.py
 
     # --------------------------------------------------------
     # 🧹 Clean parquet
