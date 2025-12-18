@@ -1,29 +1,34 @@
 import os
 import pandas as pd
+from pathlib import Path
 from functools import reduce
 
 # --------------------------------------------------
 # Paths
 # --------------------------------------------------
-CLEAN_DIR = "gee-pipeline/outputs/clean"
-OUTPUT_MERGED = "gee-pipeline/outputs/merged"
-os.makedirs(OUTPUT_MERGED, exist_ok=True)
+CLEAN_DIR = Path("gee-pipeline/outputs/clean")
+OUTPUT_MERGED = Path("gee-pipeline/outputs/merged")
+OUTPUT_MERGED.mkdir(parents=True, exist_ok=True)
 
 print("🔗 Merging cleaned parquet files...")
 
 # --------------------------------------------------
-# Load cleaned files
+# Find all cleaned parquet files (recursive)
 # --------------------------------------------------
-files = [
-    os.path.join(CLEAN_DIR, f)
-    for f in os.listdir(CLEAN_DIR)
-    if f.endswith(".parquet")
-]
+parquet_files = list(CLEAN_DIR.rglob("*.parquet"))
 
-if not files:
+if not parquet_files:
     raise RuntimeError("❌ No cleaned parquet files found")
 
-dfs = [pd.read_parquet(f) for f in files]
+print(f"📦 Found {len(parquet_files)} cleaned parquet files")
+
+# --------------------------------------------------
+# Load dataframes
+# --------------------------------------------------
+dfs = []
+for f in parquet_files:
+    print(f"📥 Loading {f}")
+    dfs.append(pd.read_parquet(f))
 
 # --------------------------------------------------
 # Merge (wide format)
@@ -43,7 +48,7 @@ df_merged = df_merged.sort_values(KEYS)
 # --------------------------------------------------
 # Save merged parquet
 # --------------------------------------------------
-output_path = os.path.join(OUTPUT_MERGED, "df_merge_new.parquet")
+output_path = OUTPUT_MERGED / "df_merge_new.parquet"
 df_merged.to_parquet(output_path, index=False)
 
 print(f"✅ Merged file saved: {output_path}")
