@@ -1,4 +1,3 @@
-import os
 import pandas as pd
 from pathlib import Path
 from functools import reduce
@@ -7,37 +6,44 @@ from functools import reduce
 # Paths
 # --------------------------------------------------
 CLEAN_DIR = Path("gee-pipeline/outputs/clean")
-OUTPUT_MERGED = Path("gee-pipeline/outputs/merged")
-OUTPUT_MERGED.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR = Path("gee-pipeline/outputs/merged")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+KEYS = ["province", "district", "subdistrict", "year", "month"]
 
 print("🔗 Merging cleaned parquet files...")
 
 # --------------------------------------------------
-# Find all cleaned parquet files (recursive)
+# Load & concat per variable
 # --------------------------------------------------
-parquet_files = list(CLEAN_DIR.rglob("*.parquet"))
+dfs_per_var = []
 
-if not parquet_files:
-    raise RuntimeError("❌ No cleaned parquet files found")
+for var_dir in CLEAN_DIR.iterdir():
+    if not var_dir.is_dir():
+        continue
 
-print(f"📦 Found {len(parquet_files)} cleaned parquet files")
+    parquet_files = list(var_dir.glob("*.parquet"))
+    if not parquet_files:
+        continue
+
+    print(f"📦 Processing {var_dir.name} ({len(parquet_files)} files)")
+
+    df_var = pd.concat(
+        [pd.read_parquet(f) for f in parquet_files],
+        ignore_index=True
+    )
+
+    dfs_per_var.append(df_var)
+
+if not dfs_per_var:
+    raise RuntimeError("❌ No cleaned parquet data found")
 
 # --------------------------------------------------
-# Load dataframes
+# Merge all variables (wide format)
 # --------------------------------------------------
-dfs = []
-for f in parquet_files:
-    print(f"📥 Loading {f}")
-    dfs.append(pd.read_parquet(f))
-
-# --------------------------------------------------
-# Merge (wide format)
-# --------------------------------------------------
-KEYS = ["province", "district", "subdistrict", "year", "month"]
-
 df_merged = reduce(
     lambda left, right: pd.merge(left, right, on=KEYS, how="outer"),
-    dfs
+    dfs_per_var
 )
 
 # --------------------------------------------------
@@ -46,10 +52,10 @@ df_merged = reduce(
 df_merged = df_merged.sort_values(KEYS)
 
 # --------------------------------------------------
-# Save merged parquet
+# Save
 # --------------------------------------------------
-output_path = OUTPUT_MERGED / "df_merge_new.parquet"
+output_path = OUTPUT_DIR / "df_merge_new.parquet"
 df_merged.to_parquet(output_path, index=False)
 
-print(f"✅ Merged file saved: {output_path}")
+print(f"✅ Merged parquet saved: {output_path}")
 print("🎉 Merge completed successfully!")
