@@ -43,7 +43,7 @@ for pq_file in parquet_files:
     # --------------------------------------------------
     # Rename value column → variable name
     # --------------------------------------------------
-    key_cols = ["province", "district", "subdistrict", "year", "month"]
+    key_cols = ["province", "district", "subdistric", "year", "month"]
     value_cols = [c for c in df.columns if c not in key_cols]
 
     if len(value_cols) == 1:
