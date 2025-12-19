@@ -83,6 +83,24 @@ jobs:
         git push
 
     # --------------------------------------------------------
+    # 🧩 FILL missing data (หลัง clean)
+    # --------------------------------------------------------
+    - name: Fill missing monthly data
+      run: |
+        python gee-pipeline/scripts/fill_missing_after_clean.py
+
+    # --------------------------------------------------------
+    # 💾 COMMIT FILLED parquet
+    # --------------------------------------------------------
+    - name: Commit FILLED parquet
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add gee-pipeline/outputs/clean/*
+        git commit -m "Automated FILL missing data" || echo "No fill changes"
+        git push
+
+    # --------------------------------------------------------
     # 🔗 Merge cleaned parquet (หลัง clean ถูก commit แล้ว)
     # --------------------------------------------------------
     - name: Merge cleaned parquet
