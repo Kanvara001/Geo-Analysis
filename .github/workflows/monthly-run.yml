@@ -58,8 +58,10 @@ jobs:
     # ✅ Poll + Download + Convert 
     # --------------------------------------------------------
     - name: Download from GCS & Convert to Parquet
-      run: |
-        python gee-pipeline/scripts/poll_download_convert.py
+      env:
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        run: |
+          python gee-pipeline/scripts/poll_download_convert.py --var FireCount
 
     # --------------------------------------------------------
     # 📥 DOWNLOAD parquet จาก GCS
