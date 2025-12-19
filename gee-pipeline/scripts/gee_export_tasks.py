@@ -4,25 +4,28 @@ import os
 import time
 from datetime import datetime
 
-# =====================================================
-# 🔐 Load service account
-# =====================================================
+# -----------------------------
+# Load service account
+# -----------------------------
 SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+
+with open(KEYFILE, "r") as f:
+    key_data = json.load(f)
 
 credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
 ee.Initialize(credentials)
 
-# =====================================================
-# 🗺 Load geometry (Tambon / Province asset)
-# =====================================================
+# -----------------------------
+# Load geometry
+# -----------------------------
 TAMBON = ee.FeatureCollection(
-    "projects/geo-analysis-472713/assets/Provinces"
+    "projects/geo-analysis-472713/assets/json_provinces"
 )
 
-# =====================================================
-# ⚙️ Config
-# =====================================================
+# -----------------------------
+# Config
+# -----------------------------
 RAW_OUTPUT = "raw_export"
 BATCH_SIZE = 20
 
@@ -30,14 +33,12 @@ CURRENT_YEAR = datetime.now().year
 YEARS = list(range(2015, CURRENT_YEAR + 1))
 MONTHS = list(range(1, 13))
 
-# =====================================================
-# 📦 Dataset definitions
-# =====================================================
+# -----------------------------
+# Dataset definitions
+# -----------------------------
 DATASETS = {
 
-    # -------------------------------------------------
-    # ❌ NDVI (ไม่รันใหม่ — คงไว้)
-    # -------------------------------------------------
+    # ❌ NDVI (ไม่รัน)
     # "NDVI": {
     #     "ic": "MODIS/061/MOD13Q1",
     #     "scale": 250,
@@ -45,9 +46,7 @@ DATASETS = {
     #     "band": "NDVI",
     # },
 
-    # -------------------------------------------------
-    # ❌ LST (ไม่รันใหม่ — คงไว้)
-    # -------------------------------------------------
+    # ❌ LST (ไม่รัน)
     # "LST": {
     #     "ic": "MODIS/061/MOD11A2",
     #     "scale": 1000,
@@ -55,19 +54,7 @@ DATASETS = {
     #     "band": "LST_Day_1km",
     # },
 
-    # -------------------------------------------------
-    # ❌ Rainfall (ไม่รันใหม่ — คงไว้)
-    # -------------------------------------------------
-    # "Rainfall": {
-    #     "ic": "UCSB-CHG/CHIRPS/DAILY",
-    #     "scale": 10000,
-    #     "reducer": ee.Reducer.sum(),
-    #     "band": "precipitation",
-    # },
-
-    # -------------------------------------------------
-    # ❌ SoilMoisture (ไม่รันใหม่ — คงไว้)
-    # -------------------------------------------------
+    # ❌ SoilMoisture (ไม่รัน)
     # "SoilMoisture": {
     #     "ic": "NASA/SMAP/SPL4SMGP/007",
     #     "scale": 10000,
@@ -75,9 +62,15 @@ DATASETS = {
     #     "band": "sm_surface",
     # },
 
-    # -------------------------------------------------
+    # ❌ Rainfall (ไม่รัน)
+    # "Rainfall": {
+    #     "ic": "UCSB-CHG/CHIRPS/DAILY",
+    #     "scale": 10000,
+    #     "reducer": ee.Reducer.sum(),
+    #     "band": "precipitation",
+    # },
+
     # ✅ FireCount (รันใหม่เฉพาะตัวนี้)
-    # -------------------------------------------------
     "FireCount": {
         "ic": "MODIS/061/MOD14A1",
         "scale": 1000,
@@ -85,54 +78,57 @@ DATASETS = {
     },
 }
 
-# =====================================================
-# 📆 Helper: monthly interval
-# =====================================================
+# -----------------------------
+# Helper for monthly interval
+# -----------------------------
 def month_filter(year, month):
     start = ee.Date.fromYMD(year, month, 1)
     end = start.advance(1, "month")
     return start, end
 
-# =====================================================
-# 🔥 FireCount preprocessing (CRITICAL FIX)
-# =====================================================
-def prepare_firecount(image):
+# -----------------------------
+# 🔥 FireCount preprocessing (FIX)
+# -----------------------------
+def prepare_firecount(img):
     """
     FireMask values:
     7 = high confidence fire
 
     Output:
-    1 = fire detected
+    1 = fire
     0 = no fire
     """
-    return image.select("FireMask").eq(7).rename("FireCount")
+    return img.select("FireMask").gte(7).rename("FireCount")
 
-# =====================================================
-# 📤 Export one month
-# =====================================================
+# -----------------------------
+# Export one month
+# -----------------------------
 def export_month(year, month, variable, spec):
-    start, end = month_filter(year, month)
-    ic = ee.ImageCollection(spec["ic"]).filterDate(start, end)
 
-    # ---------------------------------------------
-    # FireCount logic (FIXED & SAFE)
-    # ---------------------------------------------
+    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
+    scale = spec["scale"]
+
+    # ------------------------------------------------
+    # 🔥 FireCount logic (FIXED — DO NOT TOUCH)
+    # ------------------------------------------------
     if variable == "FireCount":
         ic = ic.map(prepare_firecount)
+        img = ic.sum()  # total fire days in month
 
-        # Skip month if no image
-        img = ee.Image(
-            ee.Algorithms.If(
-                ic.size().gt(0),
-                ic.sum(),
-                ee.Image.constant(0).rename("FireCount")
-            )
-        )
+        reducer = ee.Reducer.sum()
+
+    # ------------------------------------------------
+    # (โครงสร้างเดิม – เผื่อเปิดตัวอื่นในอนาคต)
+    # ------------------------------------------------
+    else:
+        band = spec["band"]
+        reducer = spec["reducer"]
+        img = ic.select(band).mean()
 
     zonal = img.reduceRegions(
         collection=TAMBON,
-        reducer=ee.Reducer.sum(),
-        scale=spec["scale"],
+        reducer=reducer,
+        scale=scale,
     )
 
     zonal = zonal.map(lambda f: f.set({
@@ -154,9 +150,9 @@ def export_month(year, month, variable, spec):
     task.start()
     return task
 
-# =====================================================
-# 🚀 Batch runner
-# =====================================================
+# -----------------------------
+# Batch runner
+# -----------------------------
 def run_all_exports():
     all_tasks = []
     count = 0
@@ -175,9 +171,9 @@ def run_all_exports():
     print(f"🎉 Submitted {len(all_tasks)} FireCount export tasks")
     return all_tasks
 
-# =====================================================
-# ▶ Run
-# =====================================================
+# -----------------------------
+# Run
+# -----------------------------
 if __name__ == "__main__":
-    print("🚀 Exporting FireCount ONLY (fixed logic)")
+    print("🚀 Exporting FireCount ONLY (FIXED)")
     run_all_exports()
