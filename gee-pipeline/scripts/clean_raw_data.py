@@ -9,79 +9,70 @@ CLEAN_DIR.mkdir(parents=True, exist_ok=True)
 KEYS = ["province", "district", "subdistrict", "year", "month"]
 THRESHOLD = 2  # months
 
-# --------------------------------------------------
-# Utility functions
-# --------------------------------------------------
-def iqr_filter(series):
-    q1, q3 = series.quantile([0.25, 0.75])
+def iqr_filter(s):
+    q1, q3 = s.quantile([0.25, 0.75])
     iqr = q3 - q1
-    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    return series.where(series.between(lo, hi))
+    return s.where((s >= q1 - 1.5 * iqr) & (s <= q3 + 1.5 * iqr))
 
-def fill_missing_monthly(df, col):
+def fill_missing(df, col):
     df = df.sort_values(["year", "month"])
-    s = df[col]
+    df[col] = df[col].interpolate(limit=THRESHOLD - 1)
 
-    # interpolate small gaps
-    s_interp = s.interpolate(limit=THRESHOLD-1)
+    missing = df[col].isna()
+    if missing.any():
+        climatology = df.groupby("month")[col].mean()
+        df.loc[missing, col] = df.loc[missing, "month"].map(climatology)
 
-    # long gaps → monthly climatology
-    clim = df.groupby("month")[col].mean()
-    for i in range(len(s_interp)):
-        if pd.isna(s_interp.iloc[i]):
-            s_interp.iloc[i] = clim.loc[df.iloc[i]["month"]]
+    return df
 
-    return s_interp
-
-# --------------------------------------------------
-# Loop raw parquet
-# --------------------------------------------------
 for pq in RAW_DIR.rglob("*.parquet"):
-    VAR = pq.parent.name.upper()
-    print(f"🧹 CLEAN {VAR} → {pq.name}")
+    var = pq.parent.name.upper()
+    print(f"🧹 Cleaning {var}: {pq.name}")
 
     df = pd.read_parquet(pq)
 
-    # ---------- schema normalize ----------
-    if "subdistric" in df.columns:
-        df = df.rename(columns={"subdistric": "subdistrict"})
+    # --- normalize column names ---
+    df = df.rename(columns={"subdistric": "subdistrict"})
 
-    # drop garbage columns
-    df = df.drop(columns=[c for c in df.columns if c not in KEYS + ["mean", "sum"]])
+    # --- identify value column ---
+    value_cols = [c for c in df.columns if c not in KEYS]
+    if len(value_cols) != 1:
+        print(f"⚠️ Skip {pq.name} — ambiguous value columns")
+        continue
 
-    value_col = "mean" if "mean" in df.columns else "sum"
-    df = df.rename(columns={value_col: VAR})
+    val = value_cols[0]
+    df = df[KEYS + [val]].rename(columns={val: var})
 
-    # ---------- variable specific cleaning ----------
-    if VAR == "LST":
-        # scale MODIS
-        df[VAR] = df[VAR] * 0.02 - 273.15
-        df[VAR] = df[VAR].where(df[VAR].between(5, 55))
-        df[VAR] = iqr_filter(df[VAR])
+    # ================= VARIABLE RULES =================
+    if var == "LST":
+        df[var] = df[var] * 0.02 - 273.15
+        df[var] = df[var].where(df[var].between(5, 55))
+        df[var] = iqr_filter(df[var])
 
-    elif VAR == "NDVI":
-        df[VAR] = df[VAR].where(df[VAR].between(-0.2, 1.0))
-        df[VAR] = df[VAR].replace(0, np.nan)
-        df[VAR] = iqr_filter(df[VAR])
+    elif var == "NDVI":
+        df[var] = df[var] / 10000
+        df[var] = df[var].where(df[var].between(-0.2, 1.0))
+        df.loc[df[var] == 0, var] = np.nan
+        df[var] = iqr_filter(df[var])
 
-    elif VAR == "SOILMOISTURE":
-        df[VAR] = df[VAR].where(df[VAR].between(0, 1))
-        df[VAR] = iqr_filter(df[VAR])
+    elif var == "SOILMOISTURE":
+        df[var] = df[var].where(df[var].between(0, 1))
+        df[var] = iqr_filter(df[var])
 
-    elif VAR == "RAINFALL":
-        df[VAR] = df[VAR].where(df[VAR] >= 0)
-        df[VAR] = iqr_filter(df[VAR])
+    elif var == "RAINFALL":
+        df[var] = df[var].where(df[var] >= 0)
 
-    elif VAR == "FIRECOUNT":
-        df[VAR] = df[VAR].where(df[VAR] >= 0)
-        df[VAR] = iqr_filter(df[VAR])
+    elif var == "FIRECOUNT":
+        df[var] = df[var].where(df[var] >= 0)
+        df[var] = iqr_filter(df[var])
 
-    # ---------- missing handling ----------
-    df[VAR] = fill_missing_monthly(df, VAR)
+    # ================= MISSING LOGIC =================
+    df = df.groupby(KEYS[:-2], group_keys=False).apply(
+        lambda x: fill_missing(x, var)
+    )
 
-    # ---------- save ----------
-    out_dir = CLEAN_DIR / VAR
+    out_dir = CLEAN_DIR / var
     out_dir.mkdir(exist_ok=True)
-    df[KEYS + [VAR]].to_parquet(out_dir / pq.name, index=False)
+    df.to_parquet(out_dir / pq.name, index=False)
 
-print("✅ CLEAN COMPLETED — schema fixed, scale fixed, safe to merge")
+print("✅ CLEAN COMPLETED — READY FOR MERGE")
