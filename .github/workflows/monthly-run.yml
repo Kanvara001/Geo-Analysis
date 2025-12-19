@@ -120,7 +120,7 @@ jobs:
     # --------------------------------------------------------
     - name: Final FILL after merge
       run: |
-        python gee-pipeline/scripts/fill_missing_full.py
+        python gee-pipeline/scripts/final_fill_after_merge.py
 
     # --------------------------------------------------------
     # 💾 COMMIT FILLED
