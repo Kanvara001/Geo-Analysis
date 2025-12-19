@@ -52,7 +52,7 @@ jobs:
         GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
       run: |
-        python gee-pipeline/scripts/gee_export_tasks.py
+        python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
 
     # --------------------------------------------------------
     # ✅ Poll + Download + Convert 
