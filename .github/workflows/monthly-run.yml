@@ -27,23 +27,35 @@ jobs:
       run: |
         echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
+    - name: DEBUG — Show generated JSON
+      run: |
+        echo "----- JSON START -----"
+        cat gee-pipeline/service-key.json
+        echo "----- JSON END -----"
+
+
     # --------------------------------------------------------
-    # 🔐 Authenticate
+    # 🔐 Authenticate — FIXED version (no project switch)
     # --------------------------------------------------------
-    - name: Authenticate Service Account
+    - name: Authenticate Service Account (No Project Switching)
       run: |
         export GOOGLE_APPLICATION_CREDENTIALS=gee-pipeline/service-key.json
         gcloud auth activate-service-account --key-file=gee-pipeline/service-key.json
 
+
     # --------------------------------------------------------
-    # ❌ GEE Export (ไม่รัน)
+    # ✅ Run Export Script (GEE → GCS)
     # --------------------------------------------------------
     - name: Run Export Script (GEE to GCS)
+      env:
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+        GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
       run: |
         python gee-pipeline/scripts/gee_export_tasks.py
 
     # --------------------------------------------------------
-    # ❌ Poll + Download + Convert (ไม่รัน)
+    # ✅ Poll + Download + Convert 
     # --------------------------------------------------------
     - name: Download from GCS & Convert to Parquet
       run: |
