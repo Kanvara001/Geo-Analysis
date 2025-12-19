@@ -3,47 +3,50 @@ import pandas as pd
 from functools import reduce
 
 CLEAN_DIR = "gee-pipeline/outputs/clean"
-OUTPUT_MERGED = "gee-pipeline/outputs/merged"
-os.makedirs(OUTPUT_MERGED, exist_ok=True)
-
-print("🔗 Merging cleaned parquet files...")
+OUTPUT_DIR = "gee-pipeline/outputs/merged"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 KEYS = ["province", "district", "subdistrict", "year", "month"]
 
-parquet_files = []
-for root, _, files in os.walk(CLEAN_DIR):
-    for f in files:
-        if f.endswith(".parquet"):
-            parquet_files.append(os.path.join(root, f))
+print("🔗 Merging cleaned parquet files (correct way)...")
 
-if not parquet_files:
-    raise RuntimeError("❌ No cleaned parquet files found")
+variable_dfs = {}
 
-dfs = []
+# --------------------------------------------------
+# 1) Load & concat per variable
+# --------------------------------------------------
+for variable in os.listdir(CLEAN_DIR):
+    var_dir = os.path.join(CLEAN_DIR, variable)
+    if not os.path.isdir(var_dir):
+        continue
 
-for f in parquet_files:
-    df = pd.read_parquet(f)
+    files = [
+        os.path.join(var_dir, f)
+        for f in os.listdir(var_dir)
+        if f.endswith(".parquet")
+    ]
 
-    # normalize schema
-    if "subdistric" in df.columns and "subdistrict" not in df.columns:
-        df = df.rename(columns={"subdistric": "subdistrict"})
+    dfs = [pd.read_parquet(f) for f in files]
+    df_var = pd.concat(dfs, ignore_index=True)
 
-    missing = [k for k in KEYS if k not in df.columns]
-    if missing:
-        raise RuntimeError(f"❌ {f} missing merge keys: {missing}")
+    # keep only merge keys + variable
+    keep_cols = KEYS + [variable]
+    df_var = df_var[keep_cols]
 
-    dfs.append(df)
+    variable_dfs[variable] = df_var
+    print(f"📦 {variable}: {len(df_var)} rows")
 
-print(f"📦 Loaded {len(dfs)} cleaned parquet files")
-
+# --------------------------------------------------
+# 2) Merge across variables
+# --------------------------------------------------
 df_merged = reduce(
     lambda l, r: pd.merge(l, r, on=KEYS, how="outer"),
-    dfs
+    variable_dfs.values()
 )
 
 df_merged = df_merged.sort_values(KEYS)
 
-output_path = os.path.join(OUTPUT_MERGED, "df_merge_new.parquet")
+output_path = os.path.join(OUTPUT_DIR, "merged_dataset.parquet")
 df_merged.to_parquet(output_path, index=False)
 
-print(f"✅ Merged file saved: {output_path}")
+print(f"✅ Merge completed: {output_path}")
