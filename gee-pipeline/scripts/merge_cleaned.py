@@ -5,7 +5,7 @@ from functools import reduce
 # ----------------------------------------
 # CONFIG
 # ----------------------------------------
-FILL_DIR = "gee-pipeline/outputs/filled"      # 🔥 เปลี่ยนจาก clean → fill
+FILL_DIR = "gee-pipeline/outputs/clean"      
 OUTPUT_DIR = "gee-pipeline/outputs/merged"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
