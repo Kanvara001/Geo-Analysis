@@ -38,16 +38,16 @@ jobs:
     # --------------------------------------------------------
     # ❌ GEE Export (ไม่รัน)
     # --------------------------------------------------------
-    # - name: Run Export Script (GEE to GCS)
-    #   run: |
-    #     python gee-pipeline/scripts/gee_export_tasks.py
+    - name: Run Export Script (GEE to GCS)
+      run: |
+        python gee-pipeline/scripts/gee_export_tasks.py
 
     # --------------------------------------------------------
     # ❌ Poll + Download + Convert (ไม่รัน)
     # --------------------------------------------------------
-    # - name: Download from GCS & Convert to Parquet
-    #   run: |
-    #     python gee-pipeline/scripts/poll_download_convert.py
+    - name: Download from GCS & Convert to Parquet
+      run: |
+        python gee-pipeline/scripts/poll_download_convert.py
 
     # --------------------------------------------------------
     # 📥 DOWNLOAD parquet จาก GCS
