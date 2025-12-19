@@ -2,21 +2,24 @@ import os
 import pandas as pd
 from functools import reduce
 
-CLEAN_DIR = "gee-pipeline/outputs/clean"
+# ----------------------------------------
+# CONFIG
+# ----------------------------------------
+FILL_DIR = "gee-pipeline/outputs/fill"      # 🔥 เปลี่ยนจาก clean → fill
 OUTPUT_DIR = "gee-pipeline/outputs/merged"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 KEYS = ["province", "district", "subdistrict", "year", "month"]
 
-print("🔗 Merging cleaned parquet files (correct way)...")
+print("🔗 Merging FILLED parquet files...")
 
 variable_dfs = {}
 
 # --------------------------------------------------
 # 1) Load & concat per variable
 # --------------------------------------------------
-for variable in os.listdir(CLEAN_DIR):
-    var_dir = os.path.join(CLEAN_DIR, variable)
+for variable in os.listdir(FILL_DIR):
+    var_dir = os.path.join(FILL_DIR, variable)
     if not os.path.isdir(var_dir):
         continue
 
@@ -25,6 +28,10 @@ for variable in os.listdir(CLEAN_DIR):
         for f in os.listdir(var_dir)
         if f.endswith(".parquet")
     ]
+
+    if len(files) == 0:
+        print(f"⚠️ Skip {variable} — no parquet files")
+        continue
 
     dfs = [pd.read_parquet(f) for f in files]
     df_var = pd.concat(dfs, ignore_index=True)
@@ -39,6 +46,9 @@ for variable in os.listdir(CLEAN_DIR):
 # --------------------------------------------------
 # 2) Merge across variables
 # --------------------------------------------------
+if len(variable_dfs) == 0:
+    raise RuntimeError("❌ No filled variables found to merge!")
+
 df_merged = reduce(
     lambda l, r: pd.merge(l, r, on=KEYS, how="outer"),
     variable_dfs.values()
