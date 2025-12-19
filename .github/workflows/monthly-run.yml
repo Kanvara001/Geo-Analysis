@@ -80,51 +80,29 @@ jobs:
         ls -R gee-pipeline/outputs/raw_parquet
 
     # --------------------------------------------------------
-    # 🧹 Clean raw parquet
+    # 🧹 CLEAN
     # --------------------------------------------------------
     - name: Clean raw parquet
       run: |
         python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
-    # 💾 COMMIT CLEAN (สำคัญมาก)
+    # 💾 COMMIT CLEAN
     # --------------------------------------------------------
     - name: Commit CLEAN parquet
       run: |
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
         git add gee-pipeline/outputs/clean/*
-        git commit -m "Automated clean parquet update" || echo "No clean changes to commit"
+        git commit -m "Automated CLEAN parquet update" || echo "No clean changes"
         git push
 
     # --------------------------------------------------------
-    # 🧩 FILL missing data (หลัง clean)
+    # 🔗 MERGE (ใช้ clean เท่านั้น)
     # --------------------------------------------------------
-    - name: Fill missing monthly data
-      run: |
-        python gee-pipeline/scripts/fill_missing_full.py
-
-    # --------------------------------------------------------
-    # 💾 COMMIT FILLED parquet
-    # --------------------------------------------------------
-    - name: Commit FILLED parquet
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/filled/*
-        git commit -m "Automated FILL missing data" || echo "No fill changes"
-        git push
-
-    # --------------------------------------------------------
-    # 🔗 Merge cleaned parquet (หลัง clean ถูก commit แล้ว)
-    # --------------------------------------------------------
-    - name: Merge cleaned parquet
+    - name: Merge CLEANED parquet
       run: |
         python gee-pipeline/scripts/merge_cleaned.py
-
-    - name: DEBUG — Check merged output
-      run: |
-        ls -lh gee-pipeline/outputs/merged
 
     # --------------------------------------------------------
     # 💾 COMMIT MERGED
@@ -134,5 +112,23 @@ jobs:
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
         git add gee-pipeline/outputs/merged/*
-        git commit -m "Automated merged parquet update" || echo "No merged changes to commit"
+        git commit -m "Automated MERGE parquet update" || echo "No merge changes"
+        git push
+
+    # --------------------------------------------------------
+    # 💉 FINAL FILL (อ่าน merged_dataset.parquet)
+    # --------------------------------------------------------
+    - name: Final FILL after merge
+      run: |
+        python gee-pipeline/scripts/fill_missing_full.py
+
+    # --------------------------------------------------------
+    # 💾 COMMIT FILLED
+    # --------------------------------------------------------
+    - name: Commit FILLED dataset
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
+        git commit -m "Automated FINAL FILL parquet" || echo "No fill changes"
         git push
