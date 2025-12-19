@@ -52,35 +52,35 @@ jobs:
     # --------------------------------------------------------
     # 📥 DOWNLOAD parquet จาก GCS
     # --------------------------------------------------------
-    - name: Download parquet from GCS
-      env:
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: |
-        echo "📥 Downloading parquet from GCS/parquet/"
-        mkdir -p gee-pipeline/outputs/raw_parquet
-        gsutil -m cp -r gs://${GCS_BUCKET}/parquet/* gee-pipeline/outputs/raw_parquet/
+    # - name: Download parquet from GCS
+    #   env:
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    #   run: |
+    #     echo "📥 Downloading parquet from GCS/parquet/"
+    #     mkdir -p gee-pipeline/outputs/raw_parquet
+    #     gsutil -m cp -r gs://${GCS_BUCKET}/parquet/* gee-pipeline/outputs/raw_parquet/
 
-    - name: DEBUG — list raw_parquet
-      run: |
-        ls -R gee-pipeline/outputs/raw_parquet
+    # - name: DEBUG — list raw_parquet
+    #   run: |
+    #     ls -R gee-pipeline/outputs/raw_parquet
 
     # --------------------------------------------------------
     # 🧹 Clean raw parquet
     # --------------------------------------------------------
-    - name: Clean raw parquet
-      run: |
-        python gee-pipeline/scripts/clean_raw_data.py
+    # - name: Clean raw parquet
+    #   run: |
+    #     python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
     # 💾 COMMIT CLEAN (สำคัญมาก)
     # --------------------------------------------------------
-    - name: Commit CLEAN parquet
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/clean/*
-        git commit -m "Automated clean parquet update" || echo "No clean changes to commit"
-        git push
+    # - name: Commit CLEAN parquet
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/clean/*
+    #     git commit -m "Automated clean parquet update" || echo "No clean changes to commit"
+    #     git push
 
     # --------------------------------------------------------
     # 🔗 Merge cleaned parquet (หลัง clean ถูก commit แล้ว)
