@@ -13,7 +13,7 @@ VALUE_COLUMN_MAP = {
     "NDVI": "mean",
     "SOILMOISTURE": "mean",
     "RAINFALL": "sum",
-    "FIRECOUNT": "sum",
+    # "FIRECOUNT": "sum",
 }
 
 def iqr_filter(s):
@@ -53,8 +53,8 @@ for pq in RAW_DIR.rglob("*.parquet"):
     elif var == "RAINFALL":
         df[var] = df[var].where(df[var] >= 0)
 
-    elif var == "FIRECOUNT":
-        df[var] = df[var].where(df[var] >= 0)
+    # elif var == "FIRECOUNT":
+    #     df[var] = df[var].where(df[var] >= 0)
 
     out = CLEAN_DIR / var
     out.mkdir(exist_ok=True)
