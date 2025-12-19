@@ -9,6 +9,7 @@ CLEAN_DIR.mkdir(parents=True, exist_ok=True)
 KEYS = ["province", "district", "subdistrict", "year", "month"]
 THRESHOLD = 2  # months
 
+# -------------------------------
 def iqr_filter(s):
     q1, q3 = s.quantile([0.25, 0.75])
     iqr = q3 - q1
@@ -16,35 +17,50 @@ def iqr_filter(s):
 
 def fill_missing(df, col):
     df = df.sort_values(["year", "month"])
+
+    # interpolate gaps < threshold
     df[col] = df[col].interpolate(limit=THRESHOLD - 1)
 
+    # remaining → monthly climatology
     missing = df[col].isna()
     if missing.any():
-        climatology = df.groupby("month")[col].mean()
-        df.loc[missing, col] = df.loc[missing, "month"].map(climatology)
+        clim = df.groupby("month")[col].mean()
+        df.loc[missing, col] = df.loc[missing, "month"].map(clim)
 
     return df
 
+# -------------------------------
+VALUE_COLUMN_MAP = {
+    "LST": "mean",
+    "NDVI": "mean",
+    "SOILMOISTURE": "mean",
+    "RAINFALL": "sum",
+    "FIRECOUNT": "sum",
+}
+
+# -------------------------------
 for pq in RAW_DIR.rglob("*.parquet"):
     var = pq.parent.name.upper()
     print(f"🧹 Cleaning {var}: {pq.name}")
 
-    df = pd.read_parquet(pq)
-
-    # --- normalize column names ---
-    df = df.rename(columns={"subdistric": "subdistrict"})
-
-    # --- identify value column ---
-    value_cols = [c for c in df.columns if c not in KEYS]
-    if len(value_cols) != 1:
-        print(f"⚠️ Skip {pq.name} — ambiguous value columns")
+    if var not in VALUE_COLUMN_MAP:
+        print(f"⚠️ Unknown variable: {var}")
         continue
 
-    val = value_cols[0]
-    df = df[KEYS + [val]].rename(columns={val: var})
+    df = pd.read_parquet(pq)
+
+    # normalize column names
+    df = df.rename(columns={"subdistric": "subdistrict"})
+
+    value_col = VALUE_COLUMN_MAP[var]
+    if value_col not in df.columns:
+        raise RuntimeError(f"{pq.name} missing '{value_col}' column")
+
+    df = df[KEYS + [value_col]].rename(columns={value_col: var})
 
     # ================= VARIABLE RULES =================
     if var == "LST":
+        # MODIS LST scale factor
         df[var] = df[var] * 0.02 - 273.15
         df[var] = df[var].where(df[var].between(5, 55))
         df[var] = iqr_filter(df[var])
@@ -60,6 +76,7 @@ for pq in RAW_DIR.rglob("*.parquet"):
         df[var] = iqr_filter(df[var])
 
     elif var == "RAINFALL":
+        # ❗ ไม่ตัด outlier ตามที่คุณขอ
         df[var] = df[var].where(df[var] >= 0)
 
     elif var == "FIRECOUNT":
