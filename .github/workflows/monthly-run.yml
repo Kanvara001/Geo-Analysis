@@ -67,17 +67,17 @@ jobs:
     # --------------------------------------------------------
     # 📥 DOWNLOAD parquet จาก GCS
     # --------------------------------------------------------
-    - name: Download parquet from GCS — FireCount only
+    - name: Download parquet from GCS 
       env:
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
-        echo "📥 Downloading FireCount parquet from GCS"
-        mkdir -p gee-pipeline/outputs/raw_parquet/FireCount
-        gsutil -m cp -r gs://${GCS_BUCKET}/parquet/FireCount/* gee-pipeline/outputs/raw_parquet/FireCount/
+        echo "📥 Downloading parquet from GCS/parquet/"
+        mkdir -p gee-pipeline/outputs/raw_parquet/FIRECOUNT
+        gsutil -m cp -r gs://${GCS_BUCKET}/parquet/FIRECOUNT/* gee-pipeline/outputs/raw_parquet/FIRECOUNT/
 
     - name: DEBUG — list raw_parquet
       run: |
-        ls -R gee-pipeline/outputs/raw_parquet/FireCount
+        ls -R gee-pipeline/outputs/raw_parquet/FIRECOUNT
 
     # --------------------------------------------------------
     # 🧹 CLEAN
