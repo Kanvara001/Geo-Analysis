@@ -46,23 +46,23 @@ jobs:
     # --------------------------------------------------------
     # ✅ Run Export Script (GEE → GCS)
     # # --------------------------------------------------------
-    - name: Run Export Script (GEE to GCS)
-      env:
-        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-        GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-      run: |
-        python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
+    # - name: Run Export Script (GEE to GCS)
+    #   env:
+    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+    #     GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #   run: |
+    #     python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
 
     # --------------------------------------------------------
     # ✅ Poll + Download + Convert 
     # --------------------------------------------------------
-    # - name: Download from GCS & Convert to Parquet
-    #   env:
-    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #   run: |
-    #     python gee-pipeline/scripts/poll_download_convert.py --var FireCount
+    - name: Download from GCS & Convert to Parquet
+      env:
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+      run: |
+        python gee-pipeline/scripts/poll_download_convert.py --var FireCount
 
     # --------------------------------------------------------
     # 📥 DOWNLOAD parquet จาก GCS
