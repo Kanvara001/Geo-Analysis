@@ -84,7 +84,7 @@ jobs:
     # --------------------------------------------------------
     - name: Clean raw parquet
       run: |
-        python gee-pipeline/scripts/clean_raw_data.py --var FireCount
+        python gee-pipeline/scripts/clean_raw_data.py --var FIRECOUNT
 
     # --------------------------------------------------------
     # 💾 COMMIT CLEAN
