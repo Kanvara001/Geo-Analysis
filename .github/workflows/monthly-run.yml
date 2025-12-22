@@ -46,13 +46,13 @@ jobs:
     # --------------------------------------------------------
     # ✅ Run Export Script (GEE → GCS)
     # # --------------------------------------------------------
-    # - name: Run Export Script (GEE to GCS)
-    #   env:
-    #     SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-    #     GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
-    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-    #   run: |
-    #     python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
+    - name: Run Export Script (GEE to GCS)
+      env:
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+        GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+      run: |
+        python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
 
     # --------------------------------------------------------
     # ✅ Poll + Download + Convert 
@@ -67,68 +67,68 @@ jobs:
     # --------------------------------------------------------
     # 📥 DOWNLOAD parquet จาก GCS
     # --------------------------------------------------------
-    - name: Download parquet from GCS 
-      env:
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-      run: |
-        echo "📥 Downloading parquet from GCS/parquet/"
-        mkdir -p gee-pipeline/outputs/raw_parquet
-        gsutil -m cp -r gs://${GCS_BUCKET}/parquet/* gee-pipeline/outputs/raw_parquet/
+    # - name: Download parquet from GCS 
+    #   env:
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    #   run: |
+    #     echo "📥 Downloading parquet from GCS/parquet/"
+    #     mkdir -p gee-pipeline/outputs/raw_parquet
+    #     gsutil -m cp -r gs://${GCS_BUCKET}/parquet/* gee-pipeline/outputs/raw_parquet/
 
-    - name: DEBUG — list raw_parquet
-      run: |
-        ls -R gee-pipeline/outputs/raw_parquet
+    # - name: DEBUG — list raw_parquet
+    #   run: |
+    #     ls -R gee-pipeline/outputs/raw_parquet
 
     # --------------------------------------------------------
     # 🧹 CLEAN
     # --------------------------------------------------------
-    - name: Clean raw parquet
-      run: |
-        python gee-pipeline/scripts/clean_raw_data.py
+    # - name: Clean raw parquet
+    #   run: |
+    #     python gee-pipeline/scripts/clean_raw_data.py
 
     # --------------------------------------------------------
     # 💾 COMMIT CLEAN
     # --------------------------------------------------------
-    - name: Commit CLEAN parquet
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/clean/*
-        git commit -m "Automated CLEAN parquet update" || echo "No clean changes"
-        git push
+    # - name: Commit CLEAN parquet
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/clean/*
+    #     git commit -m "Automated CLEAN parquet update" || echo "No clean changes"
+    #     git push
 
     # --------------------------------------------------------
     # 🔗 MERGE (ใช้ clean เท่านั้น)
     # --------------------------------------------------------
-    - name: Merge CLEANED parquet
-      run: |
-        python gee-pipeline/scripts/merge_cleaned.py
+    # - name: Merge CLEANED parquet
+    #   run: |
+    #     python gee-pipeline/scripts/merge_cleaned.py
 
     # --------------------------------------------------------
     # 💾 COMMIT MERGED
     # --------------------------------------------------------
-    - name: Commit MERGED parquet
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/merged/*
-        git commit -m "Automated MERGE parquet update" || echo "No merge changes"
-        git push
+    # - name: Commit MERGED parquet
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/merged/*
+    #     git commit -m "Automated MERGE parquet update" || echo "No merge changes"
+    #     git push
 
     # --------------------------------------------------------
     # 💉 FINAL FILL (อ่าน merged_dataset.parquet)
     # --------------------------------------------------------
-    - name: Final FILL after merge
-      run: |
-        python gee-pipeline/scripts/final_fill_after_merge.py
+    # - name: Final FILL after merge
+    #   run: |
+    #     python gee-pipeline/scripts/final_fill_after_merge.py
 
     # --------------------------------------------------------
     # 💾 COMMIT FILLED
     # --------------------------------------------------------
-    - name: Commit FILLED dataset
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
-        git commit -m "Automated FINAL FILL parquet" || echo "No fill changes"
-        git push
+    # - name: Commit FILLED dataset
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
+    #     git commit -m "Automated FINAL FILL parquet" || echo "No fill changes"
+    #     git push
