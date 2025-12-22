@@ -53,7 +53,7 @@ for pq in RAW_DIR.rglob("*.parquet"):
     # elif var == "RAINFALL":
     #     df[var] = df[var].where(df[var] >= 0)
 
-    elif var == "FIRECOUNT":
+    if var == "FIRECOUNT":
         df[var] = df[var].where(df[var] >= 0)
 
     out = CLEAN_DIR / var
