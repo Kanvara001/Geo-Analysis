@@ -38,37 +38,37 @@ MONTHS = list(range(1, 13))
 # -----------------------------
 DATASETS = {
 
-    # ❌ NDVI (ไม่รัน)
-    # "NDVI": {
-    #     "ic": "MODIS/061/MOD13Q1",
-    #     "scale": 250,
-    #     "reducer": ee.Reducer.mean(),
-    #     "band": "NDVI",
-    # },
+    # NDVI 
+    "NDVI": {
+        "ic": "MODIS/061/MOD13Q1",
+        "scale": 250,
+        "reducer": ee.Reducer.mean(),
+        "band": "NDVI",
+    },
 
-    # ❌ LST (ไม่รัน)
-    # "LST": {
-    #     "ic": "MODIS/061/MOD11A2",
-    #     "scale": 1000,
-    #     "reducer": ee.Reducer.mean(),
-    #     "band": "LST_Day_1km",
-    # },
+    # LST
+    "LST": {
+        "ic": "MODIS/061/MOD11A2",
+        "scale": 1000,
+        "reducer": ee.Reducer.mean(),
+        "band": "LST_Day_1km",
+    },
 
-    # ❌ SoilMoisture (ไม่รัน)
-    # "SoilMoisture": {
-    #     "ic": "NASA/SMAP/SPL4SMGP/007",
-    #     "scale": 10000,
-    #     "reducer": ee.Reducer.mean(),
-    #     "band": "sm_surface",
-    # },
+    #  SoilMoisture 
+    "SoilMoisture": {
+        "ic": "NASA/SMAP/SPL4SMGP/007",
+        "scale": 10000,
+        "reducer": ee.Reducer.mean(),
+        "band": "sm_surface",
+    },
 
-    # ❌ Rainfall (ไม่รัน)
-    # "Rainfall": {
-    #     "ic": "UCSB-CHG/CHIRPS/DAILY",
-    #     "scale": 10000,
-    #     "reducer": ee.Reducer.sum(),
-    #     "band": "precipitation",
-    # },
+    #  Rainfall 
+    "Rainfall": {
+        "ic": "UCSB-CHG/CHIRPS/DAILY",
+        "scale": 10000,
+        "reducer": ee.Reducer.sum(),
+        "band": "precipitation",
+    },
 
     # ✅ FireCount (รันใหม่เฉพาะตัวนี้)
     "FireCount": {
