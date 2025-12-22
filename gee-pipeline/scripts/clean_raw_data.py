@@ -9,10 +9,10 @@ CLEAN_DIR.mkdir(parents=True, exist_ok=True)
 KEYS = ["province", "district", "subdistrict", "year", "month"]
 
 VALUE_COLUMN_MAP = {
-    # "LST": "mean",
-    # "NDVI": "mean",
-    # "SOILMOISTURE": "mean",
-    # "RAINFALL": "sum",
+    "LST": "mean",
+    "NDVI": "mean",
+    "SOILMOISTURE": "mean",
+    "RAINFALL": "sum",
     "FIRECOUNT": "sum",
 }
 
@@ -35,25 +35,25 @@ for pq in RAW_DIR.rglob("*.parquet"):
     df = df[KEYS + [val_col]].rename(columns={val_col: var})
 
     # ---------- RULES ----------
-    # if var == "LST":
-    #     df[var] = df[var] * 0.02 - 273.15
-    #     df[var] = df[var].where(df[var].between(5, 55))
-    #     df[var] = iqr_filter(df[var])
+    if var == "LST":
+        df[var] = df[var] * 0.02 - 273.15
+        df[var] = df[var].where(df[var].between(5, 55))
+        df[var] = iqr_filter(df[var])
 
-    # elif var == "NDVI":
-    #     df[var] = df[var] / 10000
-    #     df[var] = df[var].where(df[var].between(-0.2, 1.0))
-    #     df.loc[df[var] == 0, var] = np.nan
-    #     df[var] = iqr_filter(df[var])
+    elif var == "NDVI":
+        df[var] = df[var] / 10000
+        df[var] = df[var].where(df[var].between(-0.2, 1.0))
+        df.loc[df[var] == 0, var] = np.nan
+        df[var] = iqr_filter(df[var])
 
-    # elif var == "SOILMOISTURE":
-    #     df[var] = df[var].where(df[var].between(0, 1))
-    #     df[var] = iqr_filter(df[var])
+    elif var == "SOILMOISTURE":
+        df[var] = df[var].where(df[var].between(0, 1))
+        df[var] = iqr_filter(df[var])
 
-    # elif var == "RAINFALL":
-    #     df[var] = df[var].where(df[var] >= 0)
+    elif var == "RAINFALL":
+        df[var] = df[var].where(df[var] >= 0)
 
-    if var == "FIRECOUNT":
+    elif var == "FIRECOUNT":
         df[var] = df[var].where(df[var] >= 0)
 
     out = CLEAN_DIR / var
