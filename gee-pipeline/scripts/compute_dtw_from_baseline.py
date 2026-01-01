@@ -54,7 +54,7 @@ df["year_month"] = df["year"].astype(str) + "-" + df["month"].astype(str).str.zf
 print("Computing baseline (trimmed mean)...")
 baseline_series = {}
 
-for (district, subdistrict), group in df.groupby(["District", "Subdistrict"]):
+for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
     baseline_series[(district, subdistrict)] = {}
 
     for var in VARIABLES:
@@ -74,7 +74,7 @@ for (district, subdistrict), group in df.groupby(["District", "Subdistrict"]):
 print("Computing DTW distances...")
 results = []
 
-for (district, subdistrict), group in df.groupby(["District", "Subdistrict"]):
+for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
     group = group.sort_values("year_month")
 
     for year, year_group in group.groupby("year"):
