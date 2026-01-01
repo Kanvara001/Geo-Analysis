@@ -81,9 +81,9 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
         year_group = year_group.sort_values("month")
 
         row = {
-            "Province": year_group["Province"].iloc[0],
-            "District": district,
-            "Subdistrict": subdistrict,
+            "province": year_group["Province"].iloc[0],
+            "district": district,
+            "subdistrict": subdistrict,
             "year": year
         }
 
