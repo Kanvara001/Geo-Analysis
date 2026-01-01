@@ -1,0 +1,44 @@
+name: Run DTW Analysis
+
+on:
+  workflow_dispatch:  # รันเฉพาะ manual เท่านั้น
+
+permissions:
+  contents: write   # จำเป็นสำหรับ git push
+
+jobs:
+  run-dtw:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r gee-pipeline/requirements.txt
+
+    - name: Run DTW computation
+      run: |
+        python gee-pipeline/scripts/compute_dtw_from_baseline.py
+
+    - name: Upload DTW results
+      uses: actions/upload-artifact@v4
+      with:
+        name: dtw-results
+        path: gee-pipeline/outputs/merged/dtw_results.parquet
+
+    - name: Commit & push DTW result
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+
+        git add gee-pipeline/outputs/merged/dtw_results.parquet
+        git commit -m "Auto: update DTW results" || echo "No changes to commit"
+        git push
