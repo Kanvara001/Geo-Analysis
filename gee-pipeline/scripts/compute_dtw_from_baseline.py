@@ -46,6 +46,15 @@ def dtw_distance(X, Y):
 print("Loading dataset...")
 df = pd.read_parquet(INPUT_PATH)
 
+# normalize column names
+df.columns = df.columns.str.strip().str.lower()
+
+# sanity check
+required_cols = {"province", "district", "subdistrict", "year", "month"}
+missing = required_cols - set(df.columns)
+if missing:
+    raise ValueError(f"Missing required columns: {missing}")
+
 df["year_month"] = df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2)
 
 # -----------------------------
@@ -60,13 +69,12 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
     for var in VARIABLES:
         monthly_values = []
         for m in range(1, 13):
-            vals = group[group["month"] == m][var].dropna().values
+            vals = group[group["month"] == m][var.lower()].dropna().values
             if len(vals) > 0:
                 monthly_values.append(trim_mean(vals, TRIM_RATIO))
             else:
                 monthly_values.append(np.nan)
         baseline_series[(district, subdistrict)][var] = np.array(monthly_values)
-
 
 # -----------------------------
 # DTW CALCULATION
@@ -81,14 +89,15 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
         year_group = year_group.sort_values("month")
 
         row = {
-            "province": year_group["Province"].iloc[0],
+            "province": year_group["province"].iloc[0],
             "district": district,
             "subdistrict": subdistrict,
             "year": year
         }
 
         for var in VARIABLES:
-            X = year_group[var].values.astype(float)
+            col = var.lower()
+            X = year_group[col].values.astype(float)
             Y = baseline_series[(district, subdistrict)][var].astype(float)
 
             if np.isnan(X).any() or np.isnan(Y).any():
@@ -96,7 +105,7 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
             else:
                 dist = dtw_distance(X, Y)
 
-            row[f"DTW_{var}"] = dist
+            row[f"dtw_{col}"] = dist
 
         results.append(row)
 
@@ -107,7 +116,7 @@ dtw_df = pd.DataFrame(results)
 # -----------------------------
 print("Computing thresholds...")
 for var in VARIABLES:
-    col = f"DTW_{var}"
+    col = f"dtw_{var.lower()}"
     mean = dtw_df[col].mean()
     std = dtw_df[col].std()
     q1 = dtw_df[col].quantile(0.25)
@@ -115,9 +124,9 @@ for var in VARIABLES:
     iqr = q3 - q1
     p95 = dtw_df[col].quantile(0.95)
 
-    dtw_df[f"{col}_TH_MEAN2STD"] = mean + 2 * std
-    dtw_df[f"{col}_TH_IQR"] = q3 + 1.5 * iqr
-    dtw_df[f"{col}_TH_P95"] = p95
+    dtw_df[f"{col}_th_mean2std"] = mean + 2 * std
+    dtw_df[f"{col}_th_iqr"] = q3 + 1.5 * iqr
+    dtw_df[f"{col}_th_p95"] = p95
 
 # -----------------------------
 # SAVE OUTPUT
