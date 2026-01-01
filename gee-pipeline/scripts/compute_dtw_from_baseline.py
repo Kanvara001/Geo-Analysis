@@ -1,87 +1,129 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import trim_mean
-from tslearn.metrics import dtw
+from pathlib import Path
 
 # -----------------------------
 # CONFIG
 # -----------------------------
-PARQUET_PATH = "merged_dataset_FILLED.parquet"
-OUTPUT_PATH = "dtw_distance.parquet"
+INPUT_PATH = "gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet"
+OUTPUT_PATH = "gee-pipeline/outputs/merged/dtw_results.parquet"
 
-VALUE_COLS = [
-    "NDVI",
-    "Rainfall",
-    "SoilMoisture",
-    "LST",
-    "FireCount"
-]
+VARIABLES = ["NDVI", "RAINFALL", "SOILMOISTURE", "LST", "FIRECOUNT"]
+TRIM_RATIO = 0.1
 
-TRIM_RATIO = 0.1   # 10% trim mean
+# -----------------------------
+# DTW FUNCTIONS
+# -----------------------------
+def compute_cost_matrix(X, Y):
+    N, M = len(X), len(Y)
+    C = np.zeros((N, M))
+    for i in range(N):
+        for j in range(M):
+            C[i, j] = abs(X[i] - Y[j])
+    return C
+
+
+def dtw_distance(X, Y):
+    C = compute_cost_matrix(X, Y)
+    N, M = C.shape
+    D = np.full((N + 1, M + 1), np.inf)
+    D[0, 0] = 0
+
+    for i in range(1, N + 1):
+        for j in range(1, M + 1):
+            D[i, j] = C[i - 1, j - 1] + min(
+                D[i - 1, j],
+                D[i, j - 1],
+                D[i - 1, j - 1]
+            )
+    return D[N, M]
+
 
 # -----------------------------
 # LOAD DATA
 # -----------------------------
-df = pd.read_parquet(PARQUET_PATH)
+print("Loading dataset...")
+df = pd.read_parquet(INPUT_PATH)
 
-df = df.sort_values(["area_id", "year", "month"]).reset_index(drop=True)
-
-# -----------------------------
-# 1) CREATE BASELINE (Trimmed Mean)
-# baseline = (area_id, month, variable)
-# -----------------------------
-baseline = (
-    df
-    .groupby(["area_id", "month"])[VALUE_COLS]
-    .agg(lambda x: trim_mean(x.dropna(), TRIM_RATIO))
-    .reset_index()
-)
-
-baseline = baseline.rename(
-    columns={col: f"{col}_baseline" for col in VALUE_COLS}
-)
+df["year_month"] = df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2)
 
 # -----------------------------
-# 2) MERGE BASELINE BACK
+# BASELINE (trimmed mean)
 # -----------------------------
-df = df.merge(
-    baseline,
-    on=["area_id", "month"],
-    how="left"
-)
+print("Computing baseline (trimmed mean)...")
+baseline_series = {}
+
+for (district, subdistrict), group in df.groupby(["District", "Subdistrict"]):
+    baseline_series[(district, subdistrict)] = {}
+
+    for var in VARIABLES:
+        monthly_values = []
+        for m in range(1, 13):
+            vals = group[group["month"] == m][var].dropna().values
+            if len(vals) > 0:
+                monthly_values.append(trim_mean(vals, TRIM_RATIO))
+            else:
+                monthly_values.append(np.nan)
+        baseline_series[(district, subdistrict)][var] = np.array(monthly_values)
+
 
 # -----------------------------
-# 3) DTW CALCULATION
-# DTW per (area_id, year, month)
+# DTW CALCULATION
 # -----------------------------
+print("Computing DTW distances...")
 results = []
 
-for (area_id, year), g in df.groupby(["area_id", "year"]):
+for (district, subdistrict), group in df.groupby(["District", "Subdistrict"]):
+    group = group.sort_values("year_month")
 
-    g = g.sort_values("month")
+    for year, year_group in group.groupby("year"):
+        year_group = year_group.sort_values("month")
 
-    for var in VALUE_COLS:
-        series_actual = g[var].values.astype(float)
-        series_baseline = g[f"{var}_baseline"].values.astype(float)
+        row = {
+            "Province": year_group["Province"].iloc[0],
+            "District": district,
+            "Subdistrict": subdistrict,
+            "year": year
+        }
 
-        # ต้องไม่มี NaN
-        if np.isnan(series_actual).any() or np.isnan(series_baseline).any():
-            continue
+        for var in VARIABLES:
+            X = year_group[var].values.astype(float)
+            Y = baseline_series[(district, subdistrict)][var].astype(float)
 
-        distance = dtw(series_actual, series_baseline)
+            if np.isnan(X).any() or np.isnan(Y).any():
+                dist = np.nan
+            else:
+                dist = dtw_distance(X, Y)
 
-        results.append({
-            "area_id": area_id,
-            "year": year,
-            "variable": var,
-            "dtw_distance": distance
-        })
+            row[f"DTW_{var}"] = dist
+
+        results.append(row)
+
+dtw_df = pd.DataFrame(results)
+
+# -----------------------------
+# THRESHOLDS
+# -----------------------------
+print("Computing thresholds...")
+for var in VARIABLES:
+    col = f"DTW_{var}"
+    mean = dtw_df[col].mean()
+    std = dtw_df[col].std()
+    q1 = dtw_df[col].quantile(0.25)
+    q3 = dtw_df[col].quantile(0.75)
+    iqr = q3 - q1
+    p95 = dtw_df[col].quantile(0.95)
+
+    dtw_df[f"{col}_TH_MEAN2STD"] = mean + 2 * std
+    dtw_df[f"{col}_TH_IQR"] = q3 + 1.5 * iqr
+    dtw_df[f"{col}_TH_P95"] = p95
 
 # -----------------------------
 # SAVE OUTPUT
 # -----------------------------
-dtw_df = pd.DataFrame(results)
+Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
 dtw_df.to_parquet(OUTPUT_PATH, index=False)
 
-print("✅ DTW computation completed")
-print(dtw_df.head())
+print("DTW computation finished.")
+print(f"Saved to {OUTPUT_PATH}")
