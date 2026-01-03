@@ -39,7 +39,6 @@ def dtw_distance(X, Y):
             )
     return D[N, M]
 
-
 # -----------------------------
 # LOAD DATA
 # -----------------------------
@@ -49,16 +48,13 @@ df = pd.read_parquet(INPUT_PATH)
 # normalize column names
 df.columns = df.columns.str.strip().str.lower()
 
-# sanity check
 required_cols = {"province", "district", "subdistrict", "year", "month"}
 missing = required_cols - set(df.columns)
 if missing:
     raise ValueError(f"Missing required columns: {missing}")
 
-df["year_month"] = df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2)
-
 # -----------------------------
-# BASELINE (trimmed mean)
+# BASELINE (trimmed mean per month per subdistrict)
 # -----------------------------
 print("Computing baseline (trimmed mean)...")
 baseline_series = {}
@@ -67,23 +63,25 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
     baseline_series[(district, subdistrict)] = {}
 
     for var in VARIABLES:
-        monthly_values = []
+        col = var.lower()
+        monthly_baseline = []
+
         for m in range(1, 13):
-            vals = group[group["month"] == m][var.lower()].dropna().values
+            vals = group[group["month"] == m][col].dropna().values
             if len(vals) > 0:
-                monthly_values.append(trim_mean(vals, TRIM_RATIO))
+                monthly_baseline.append(trim_mean(vals, TRIM_RATIO))
             else:
-                monthly_values.append(np.nan)
-        baseline_series[(district, subdistrict)][var] = np.array(monthly_values)
+                monthly_baseline.append(np.nan)
+
+        baseline_series[(district, subdistrict)][var] = np.array(monthly_baseline)
 
 # -----------------------------
-# DTW CALCULATION
+# DTW CALCULATION (per year)
 # -----------------------------
 print("Computing DTW distances...")
 results = []
 
 for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
-    group = group.sort_values("year_month")
 
     for year, year_group in group.groupby("year"):
         year_group = year_group.sort_values("month")
@@ -100,7 +98,7 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
             X = year_group[col].values.astype(float)
             Y = baseline_series[(district, subdistrict)][var].astype(float)
 
-            if np.isnan(X).any() or np.isnan(Y).any():
+            if len(X) != 12 or np.isnan(X).any() or np.isnan(Y).any():
                 dist = np.nan
             else:
                 dist = dtw_distance(X, Y)
@@ -112,21 +110,19 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
 dtw_df = pd.DataFrame(results)
 
 # -----------------------------
-# THRESHOLDS
+# THRESHOLD (GLOBAL: all years × all areas)
 # -----------------------------
-print("Computing thresholds...")
+print("Computing global thresholds (mean + 2σ)...")
+
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
+
     mean = dtw_df[col].mean()
     std = dtw_df[col].std()
-    q1 = dtw_df[col].quantile(0.25)
-    q3 = dtw_df[col].quantile(0.75)
-    iqr = q3 - q1
-    p95 = dtw_df[col].quantile(0.95)
+    threshold = mean + 2 * std
 
-    dtw_df[f"{col}_th_mean2std"] = mean + 2 * std
-    dtw_df[f"{col}_th_iqr"] = q3 + 1.5 * iqr
-    dtw_df[f"{col}_th_p95"] = p95
+    dtw_df[f"{col}_threshold"] = threshold
+    dtw_df[f"{col}_flag"] = (dtw_df[col] > threshold).astype(int)
 
 # -----------------------------
 # SAVE OUTPUT
