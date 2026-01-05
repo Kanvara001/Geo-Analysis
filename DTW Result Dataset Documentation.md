@@ -112,7 +112,7 @@ Threshold แบบเฉพาะพื้นที่
 
 | Column | Description |
 |------|------------|
-| `dtw_xxx_z_flag` | 1 = Z-score > 2, 0 = ปกติ |
+| `dtw_xxx_z_flag` | 1 = Z-score > 2 (ผิดปกติ), 0 = ปกติ |
 
 **Interpretation**
 - ใช้ threshold เดียวกันทุกพื้นที่
