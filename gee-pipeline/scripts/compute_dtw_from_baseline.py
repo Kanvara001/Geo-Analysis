@@ -54,13 +54,16 @@ if missing:
     raise ValueError(f"Missing required columns: {missing}")
 
 # -----------------------------
-# BASELINE (trimmed mean per month per subdistrict)
+# BASELINE (trimmed mean per month per SUBDISTRICT)
 # -----------------------------
-print("Computing baseline (trimmed mean)...")
+print("Computing baseline (local subdistrict baseline)...")
 baseline_series = {}
 
-for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
-    baseline_series[(district, subdistrict)] = {}
+for (province, district, subdistrict), group in df.groupby(
+    ["province", "district", "subdistrict"]
+):
+    key = (province, district, subdistrict)
+    baseline_series[key] = {}
 
     for var in VARIABLES:
         col = var.lower()
@@ -73,21 +76,24 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
             else:
                 monthly_baseline.append(np.nan)
 
-        baseline_series[(district, subdistrict)][var] = np.array(monthly_baseline)
+        baseline_series[key][var] = np.array(monthly_baseline)
 
 # -----------------------------
-# DTW CALCULATION (per year)
+# DTW CALCULATION (per year, local baseline)
 # -----------------------------
 print("Computing DTW distances...")
 results = []
 
-for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
+for (province, district, subdistrict), group in df.groupby(
+    ["province", "district", "subdistrict"]
+):
+    key = (province, district, subdistrict)
 
     for year, year_group in group.groupby("year"):
         year_group = year_group.sort_values("month")
 
         row = {
-            "province": year_group["province"].iloc[0],
+            "province": province,
             "district": district,
             "subdistrict": subdistrict,
             "year": year
@@ -96,7 +102,7 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
         for var in VARIABLES:
             col = var.lower()
             X = year_group[col].values.astype(float)
-            Y = baseline_series[(district, subdistrict)][var].astype(float)
+            Y = baseline_series[key][var].astype(float)
 
             if len(X) != 12 or np.isnan(X).any() or np.isnan(Y).any():
                 dist = np.nan
@@ -110,19 +116,44 @@ for (district, subdistrict), group in df.groupby(["district", "subdistrict"]):
 dtw_df = pd.DataFrame(results)
 
 # -----------------------------
-# THRESHOLD (GLOBAL: all years × all areas)
+# LOCAL THRESHOLD (per subdistrict × per variable)
+# mean + 2σ
 # -----------------------------
-print("Computing global thresholds (mean + 2σ)...")
+print("Computing local thresholds (per subdistrict)...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
 
-    mean = dtw_df[col].mean()
-    std = dtw_df[col].std()
-    threshold = mean + 2 * std
+    # คำนวณ mean และ std แยกตามพื้นที่
+    stats = (
+        dtw_df
+        .groupby(["district", "subdistrict"])[col]
+        .agg(["mean", "std"])
+        .reset_index()
+        .rename(columns={
+            "mean": f"{col}_local_mean",
+            "std": f"{col}_local_std"
+        })
+    )
 
-    dtw_df[f"{col}_threshold"] = threshold
-    dtw_df[f"{col}_flag"] = (dtw_df[col] > threshold).astype(int)
+    # รวมกลับเข้า dtw_df
+    dtw_df = dtw_df.merge(
+        stats,
+        on=["district", "subdistrict"],
+        how="left"
+    )
+
+    # threshold = mean + 2σ
+    dtw_df[f"{col}_local_threshold"] = (
+        dtw_df[f"{col}_local_mean"] +
+        2 * dtw_df[f"{col}_local_std"]
+    )
+
+    # flag anomaly
+    dtw_df[f"{col}_flag"] = (
+        dtw_df[col] > dtw_df[f"{col}_local_threshold"]
+    ).astype(int)
+
 
 # -----------------------------
 # SAVE OUTPUT
