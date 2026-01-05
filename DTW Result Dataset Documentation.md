@@ -79,8 +79,8 @@ DTW วัดความแตกต่างของ **รูปแบบข�
 |------|------------|
 | `dtw_xxx_z` | ค่า DTW หลัง normalize ด้วย Z-score ต่อพื้นที่ |
 
-**Formula**
-Z = (DTW - local_mean) / local_std
+**Z = (DTW - local_mean) / local_std**
+
 
 
 **Interpretation**
