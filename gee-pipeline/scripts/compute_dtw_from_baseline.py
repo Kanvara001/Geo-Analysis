@@ -11,6 +11,7 @@ OUTPUT_PATH = "gee-pipeline/outputs/merged/dtw_results.parquet"
 
 VARIABLES = ["NDVI", "RAINFALL", "SOILMOISTURE", "LST", "FIRECOUNT"]
 TRIM_RATIO = 0.1
+Z_THRESHOLD = 2.0
 
 # -----------------------------
 # DTW FUNCTIONS
@@ -45,7 +46,6 @@ def dtw_distance(X, Y):
 print("Loading dataset...")
 df = pd.read_parquet(INPUT_PATH)
 
-# normalize column names
 df.columns = df.columns.str.strip().str.lower()
 
 required_cols = {"province", "district", "subdistrict", "year", "month"}
@@ -79,7 +79,7 @@ for (province, district, subdistrict), group in df.groupby(
         baseline_series[key][var] = np.array(monthly_baseline)
 
 # -----------------------------
-# DTW CALCULATION (per year, local baseline)
+# DTW CALCULATION (per year × subdistrict)
 # -----------------------------
 print("Computing DTW distances...")
 results = []
@@ -116,15 +116,13 @@ for (province, district, subdistrict), group in df.groupby(
 dtw_df = pd.DataFrame(results)
 
 # -----------------------------
-# LOCAL THRESHOLD (per subdistrict × per variable)
-# mean + 2σ
+# LOCAL STATS (mean, std per subdistrict)
 # -----------------------------
-print("Computing local thresholds (per subdistrict)...")
+print("Computing local statistics (mean, std)...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
 
-    # คำนวณ mean และ std แยกตามพื้นที่
     stats = (
         dtw_df
         .groupby(["district", "subdistrict"])[col]
@@ -136,24 +134,52 @@ for var in VARIABLES:
         })
     )
 
-    # รวมกลับเข้า dtw_df
     dtw_df = dtw_df.merge(
         stats,
         on=["district", "subdistrict"],
         how="left"
     )
 
-    # threshold = mean + 2σ
+# -----------------------------
+# NORMALIZATION (Z-score per subdistrict)
+# -----------------------------
+print("Normalizing DTW (Z-score per subdistrict)...")
+
+for var in VARIABLES:
+    col = f"dtw_{var.lower()}"
+
+    dtw_df[f"{col}_z"] = (
+        dtw_df[col] - dtw_df[f"{col}_local_mean"]
+    ) / dtw_df[f"{col}_local_std"]
+
+# -----------------------------
+# LOCAL THRESHOLD (mean + 2σ)
+# -----------------------------
+print("Computing local thresholds (mean + 2σ)...")
+
+for var in VARIABLES:
+    col = f"dtw_{var.lower()}"
+
     dtw_df[f"{col}_local_threshold"] = (
         dtw_df[f"{col}_local_mean"] +
         2 * dtw_df[f"{col}_local_std"]
     )
 
-    # flag anomaly
     dtw_df[f"{col}_flag"] = (
         dtw_df[col] > dtw_df[f"{col}_local_threshold"]
     ).astype(int)
 
+# -----------------------------
+# GLOBAL THRESHOLD (Z-score)
+# -----------------------------
+print("Applying global Z-score threshold...")
+
+for var in VARIABLES:
+    col = f"dtw_{var.lower()}"
+
+    dtw_df[f"{col}_z_flag"] = (
+        dtw_df[f"{col}_z"] > Z_THRESHOLD
+    ).astype(int)
 
 # -----------------------------
 # SAVE OUTPUT
