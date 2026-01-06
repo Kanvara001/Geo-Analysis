@@ -1,136 +1,151 @@
-import os
 import ee
-import json
 import pandas as pd
+from pathlib import Path
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
+import sys
 
-assert "scripts_auto" in __file__, "❌ Wrong script path"
+# ----------------------------------------------------
+# CONFIG
+# ----------------------------------------------------
+SUMMARY_CSV = Path("data/processed/gee_monthly_summary.csv")
+ASSET_ROOT = "projects/geo-analysis-472713/assets/monthly"
+SERVICE_ACCOUNT = "gee-runner@geo-analysis-472713.iam.gserviceaccount.com"
+KEY_FILE = "service-account.json"
 
-MERGED_PATH = "gee-pipeline/outputs/merged/merged_dataset.parquet"
-
-# -----------------------------
-# Load last available month
-# -----------------------------
-def get_next_month():
-    df = pd.read_parquet(MERGED_PATH)
-    df["date"] = pd.to_datetime(df["date"])
-    last_date = df["date"].max()
-
-    target = last_date + relativedelta(months=1)
-
-    # ถ้าเดือนนั้นยังไม่ปิด → ไม่ทำ
-    today = datetime.today()
-    if target.year == today.year and target.month == today.month:
-        print("⏸ Month not completed yet")
-        return None
-
-    return target.year, target.month
-
-# -----------------------------
-# GEE auth
-# -----------------------------
-SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
-KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-
-credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
+# ----------------------------------------------------
+# GEE INIT
+# ----------------------------------------------------
+credentials = ee.ServiceAccountCredentials(
+    SERVICE_ACCOUNT,
+    KEY_FILE
+)
 ee.Initialize(credentials)
 
-# -----------------------------
-# Geometry
-# -----------------------------
-TAMBON = ee.FeatureCollection(
-    "projects/geo-analysis-472713/assets/json_provinces"
-)
+# ----------------------------------------------------
+# UTILS
+# ----------------------------------------------------
+def get_next_month():
+    """
+    หา (year, month) ถัดไปจากไฟล์ summary
+    ถ้าไฟล์ยังไม่มี → ใช้เดือนปัจจุบัน
+    """
+    if not SUMMARY_CSV.exists():
+        today = datetime.today()
+        return today.year, today.month
 
-# -----------------------------
-# Dataset definitions (เหมือน manual)
-# -----------------------------
-DATASETS = {
-    "NDVI": {
-        "ic": "MODIS/061/MOD13Q1",
-        "scale": 250,
-        "band": "NDVI",
-        "reducer": ee.Reducer.mean(),
-    },
-    "LST": {
-        "ic": "MODIS/061/MOD11A2",
-        "scale": 1000,
-        "band": "LST_Day_1km",
-        "reducer": ee.Reducer.mean(),
-    },
-    "SoilMoisture": {
-        "ic": "NASA/SMAP/SPL4SMGP/007",
-        "scale": 10000,
-        "band": "sm_surface",
-        "reducer": ee.Reducer.mean(),
-    },
-    "Rainfall": {
-        "ic": "UCSB-CHG/CHIRPS/DAILY",
-        "scale": 10000,
-        "band": "precipitation",
-        "reducer": ee.Reducer.sum(),
-    },
-    "FireCount": {
-        "ic": "MODIS/061/MOD14A1",
-        "scale": 1000,
-        "band": "FireMask",
-    },
-}
+    df = pd.read_csv(SUMMARY_CSV)
 
-# -----------------------------
-def month_filter(year, month):
-    start = ee.Date.fromYMD(year, month, 1)
-    end = start.advance(1, "month")
-    return start, end
+    # --- validation ---
+    required_cols = {"year", "month"}
+    if not required_cols.issubset(df.columns):
+        raise ValueError(
+            f"Missing required columns: {required_cols - set(df.columns)}"
+        )
 
-def prepare_firecount(img):
-    return img.select("FireMask").gte(7).rename("FireCount")
+    df["year"] = df["year"].astype(int)
+    df["month"] = df["month"].astype(int)
 
-# -----------------------------
-def export_month(year, month, var, spec):
-    ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
-
-    if var == "FireCount":
-        ic = ic.map(prepare_firecount)
-        img = ic.sum()
-        reducer = ee.Reducer.sum()
-    else:
-        img = ic.select(spec["band"]).mean()
-        reducer = spec["reducer"]
-
-    zonal = img.reduceRegions(
-        collection=TAMBON,
-        reducer=reducer,
-        scale=spec["scale"],
-    ).map(lambda f: f.set({
-        "year": year,
-        "month": month,
-        "variable": var
-    }))
-
-    task = ee.batch.Export.table.toCloudStorage(
-        collection=zonal,
-        description=f"{var}_{year}_{month}",
-        bucket=os.environ["GCS_BUCKET"],
-        fileNamePrefix=f"raw_export/{var}/{var}_{year}_{month:02d}",
-        fileFormat="GeoJSON",
+    # สร้าง date จาก year + month
+    df["date"] = pd.to_datetime(
+        dict(year=df.year, month=df.month, day=1)
     )
 
+    latest = df["date"].max()
+    next_month = latest + pd.DateOffset(months=1)
+
+    return next_month.year, next_month.month
+
+
+def build_asset_id(var, year, month):
+    mm = str(month).zfill(2)
+    return f"{ASSET_ROOT}/{var}_{year}_{mm}"
+
+
+def export_task(image, asset_id, region):
+    task = ee.batch.Export.image.toAsset(
+        image=image,
+        description=asset_id.split("/")[-1],
+        assetId=asset_id,
+        region=region,
+        scale=1000,
+        maxPixels=1e13
+    )
     task.start()
-    print(f"🚀 Submitted {var} {year}-{month:02d}")
+    print(f"🚀 Started export: {asset_id}")
 
-# -----------------------------
+
+# ----------------------------------------------------
+# MAIN
+# ----------------------------------------------------
 def main():
-    target = get_next_month()
-    if target is None:
-        return
 
-    year, month = target
-    print(f"📅 EXPORT TARGET: {year}-{month:02d}")
+    year, month = get_next_month()
+    print(f"📅 Export target: {year}-{str(month).zfill(2)}")
 
-    for var, spec in DATASETS.items():
-        export_month(year, month, var, spec)
+    start = ee.Date.fromYMD(year, month, 1)
+    end = start.advance(1, "month")
 
+    # ------------------------------------------------
+    # LOAD REGION
+    # ------------------------------------------------
+    provinces = ee.FeatureCollection(
+        "projects/geo-analysis-472713/assets/Provinces"
+    )
+    region = provinces.geometry()
+
+    # ------------------------------------------------
+    # DATASETS
+    # ------------------------------------------------
+    datasets = {
+        "NDVI": (
+            ee.ImageCollection("MODIS/061/MOD13Q1")
+            .filterDate(start, end)
+            .select("NDVI")
+            .mean()
+            .multiply(0.0001)
+        ),
+        "LST": (
+            ee.ImageCollection("MODIS/061/MOD11A2")
+            .filterDate(start, end)
+            .select("LST_Day_1km")
+            .mean()
+            .multiply(0.02)
+            .subtract(273.15)
+        ),
+        "SOILMOISTURE": (
+            ee.ImageCollection("NASA_USDA/HSL/SMAP10KM_soil_moisture")
+            .filterDate(start, end)
+            .select("ssm")
+            .mean()
+        ),
+        "RAINFALL": (
+            ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+            .filterDate(start, end)
+            .sum()
+        ),
+        "FIRECOUNT": (
+            ee.ImageCollection("MODIS/061/MOD14A1")
+            .filterDate(start, end)
+            .select("FireMask")
+            .map(lambda img: img.gt(6))
+            .sum()
+        )
+    }
+
+    # ------------------------------------------------
+    # EXPORT
+    # ------------------------------------------------
+    for var, img in datasets.items():
+        asset_id = build_asset_id(var, year, month)
+        export_task(img.clip(region), asset_id, region)
+
+    print("✅ All export tasks submitted")
+
+
+# ----------------------------------------------------
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("❌ ERROR:", e)
+        sys.exit(1)
