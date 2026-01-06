@@ -2,6 +2,7 @@ import ee
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import os
 import sys
 
 # ----------------------------------------------------
@@ -9,12 +10,23 @@ import sys
 # ----------------------------------------------------
 SUMMARY_CSV = Path("data/processed/gee_monthly_summary.csv")
 ASSET_ROOT = "projects/geo-analysis-472713/assets/monthly"
-SERVICE_ACCOUNT = "gee-runner@geo-analysis-472713.iam.gserviceaccount.com"
-KEY_FILE = "service-account.json"
+
+SERVICE_ACCOUNT = os.getenv(
+    "GEE_SERVICE_ACCOUNT",
+    "gee-runner@geo-analysis-472713.iam.gserviceaccount.com"
+)
+
+KEY_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 # ----------------------------------------------------
 # GEE INIT
 # ----------------------------------------------------
+if KEY_FILE is None or not Path(KEY_FILE).exists():
+    raise FileNotFoundError(
+        "GOOGLE_APPLICATION_CREDENTIALS not found. "
+        "Did you set it in GitHub Actions?"
+    )
+
 credentials = ee.ServiceAccountCredentials(
     SERVICE_ACCOUNT,
     KEY_FILE
@@ -25,27 +37,21 @@ ee.Initialize(credentials)
 # UTILS
 # ----------------------------------------------------
 def get_next_month():
-    """
-    หา (year, month) ถัดไปจากไฟล์ summary
-    ถ้าไฟล์ยังไม่มี → ใช้เดือนปัจจุบัน
-    """
     if not SUMMARY_CSV.exists():
         today = datetime.today()
         return today.year, today.month
 
     df = pd.read_csv(SUMMARY_CSV)
 
-    # --- validation ---
     required_cols = {"year", "month"}
     if not required_cols.issubset(df.columns):
         raise ValueError(
-            f"Missing required columns: {required_cols - set(df.columns)}"
+            f"Missing columns: {required_cols - set(df.columns)}"
         )
 
     df["year"] = df["year"].astype(int)
     df["month"] = df["month"].astype(int)
 
-    # สร้าง date จาก year + month
     df["date"] = pd.to_datetime(
         dict(year=df.year, month=df.month, day=1)
     )
@@ -71,7 +77,7 @@ def export_task(image, asset_id, region):
         maxPixels=1e13
     )
     task.start()
-    print(f"🚀 Started export: {asset_id}")
+    print(f"🚀 Export started: {asset_id}")
 
 
 # ----------------------------------------------------
@@ -80,22 +86,16 @@ def export_task(image, asset_id, region):
 def main():
 
     year, month = get_next_month()
-    print(f"📅 Export target: {year}-{str(month).zfill(2)}")
+    print(f"📅 Target month: {year}-{str(month).zfill(2)}")
 
     start = ee.Date.fromYMD(year, month, 1)
     end = start.advance(1, "month")
 
-    # ------------------------------------------------
-    # LOAD REGION
-    # ------------------------------------------------
     provinces = ee.FeatureCollection(
         "projects/geo-analysis-472713/assets/Provinces"
     )
     region = provinces.geometry()
 
-    # ------------------------------------------------
-    # DATASETS
-    # ------------------------------------------------
     datasets = {
         "NDVI": (
             ee.ImageCollection("MODIS/061/MOD13Q1")
@@ -132,14 +132,11 @@ def main():
         )
     }
 
-    # ------------------------------------------------
-    # EXPORT
-    # ------------------------------------------------
     for var, img in datasets.items():
         asset_id = build_asset_id(var, year, month)
         export_task(img.clip(region), asset_id, region)
 
-    print("✅ All export tasks submitted")
+    print("✅ All GEE export tasks submitted")
 
 
 # ----------------------------------------------------
