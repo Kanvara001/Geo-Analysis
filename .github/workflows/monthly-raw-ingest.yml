@@ -1,78 +1,101 @@
-name: Monthly Raw GEE Ingest (Auto)
+name: GEE Full Pipeline After Export
 
 on:
   schedule:
-    # รันทุกวันที่ 2 ของเดือน เวลา 03:00 UTC (~10:00 ไทย)
-    - cron: "0 3 2 * *"
-
+    - cron: "0 2 2 * *" # ทุกเดือน วันที่ 2 เวลา 02:00 UTC
   workflow_dispatch:
 
 jobs:
-  raw-ingest:
+  poll-convert-clean:
     runs-on: ubuntu-latest
 
     steps:
-    # -------------------------------
-    # 1️⃣ Checkout repo
-    # -------------------------------
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    # -------------------------------
-    # 2️⃣ Setup Python
-    # -------------------------------
     - name: Setup Python
       uses: actions/setup-python@v3
       with:
         python-version: "3.10"
 
-    # -------------------------------
-    # 3️⃣ Install dependencies
-    # -------------------------------
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
-    # -------------------------------
-    # 4️⃣ Create GCP service key
-    # -------------------------------
     - name: Create service-key.json
       env:
         SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
       run: |
         echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
 
-    # -------------------------------
-    # 5️⃣ Export GEE → GCS (RAW)
-    # -------------------------------
-    - name: Export RAW data from GEE to GCS
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    - name: Authenticate SA
       run: |
-        python gee-pipeline/scripts/gee_export_tasks.py \
-          --mode monthly \
-          --start_year 2025 \
-          --start_month 1
+        export GOOGLE_APPLICATION_CREDENTIALS=gee-pipeline/service-key.json
+        gcloud auth activate-service-account --key-file=gee-pipeline/service-key.json
 
-    # -------------------------------
-    # 6️⃣ Download from GCS → Parquet
-    # -------------------------------
-    - name: Download RAW data & Convert to Parquet
+    # --------------------------------------
+    # 🔄 RUN EXPORT SCRIPT
+    # --------------------------------------
+    - name: Export new tasks from GEE
       env:
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+        GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
-        python gee-pipeline/scripts/poll_download_convert.py
+        python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
 
-    # -------------------------------
-    # 7️⃣ Commit RAW parquet to repo
-    # -------------------------------
-    - name: Commit RAW parquet data
+    # --------------------------------------
+    # ⬇️ Poll + Download + Convert
+    # --------------------------------------
+    - name: Download & Convert from GCS
+      env:
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+      run: |
+        python gee-pipeline/scripts/poll_download_convert.py --var FireCount
+
+    # --------------------------------------
+    # 🧹 CLEAN NEW parquet
+    # --------------------------------------
+    - name: Clean raw parquet
+      run: |
+        python gee-pipeline/scripts/clean_raw_data.py
+
+    - name: Commit CLEAN parquet
       run: |
         git config --global user.name "github-actions"
         git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/raw_parquet/*
-        git commit -m "Monthly raw ingest (auto)" || echo "No changes to commit"
+        git add gee-pipeline/outputs/clean/*
+        git commit -m "Automated CLEAN parquet update" || echo "No clean changes"
+        git push
+
+    # --------------------------------------
+    # 🔗 MERGE
+    # --------------------------------------
+    - name: Merge cleaned data
+      run: |
+        python gee-pipeline/scripts/merge_cleaned.py
+
+    - name: Commit MERGED parquet
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add gee-pipeline/outputs/merged/*
+        git commit -m "Automated MERGE parquet update" || echo "No merge changes"
+        git push
+
+    # --------------------------------------
+    # 💉 FINAL FILL
+    # --------------------------------------
+    - name: Final fill after merge
+      run: |
+        python gee-pipeline/scripts/final_fill_after_merge.py
+
+    - name: Commit FINAL FILLED dataset
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
+        git commit -m "Automated FINAL FILL parquet" || echo "No fill changes"
         git push
