@@ -13,43 +13,48 @@ jobs:
       PIPELINE_MODE: AUTO
 
     steps:
+    # ----------------------------------------------------
+    # 📦 CHECKOUT
+    # ----------------------------------------------------
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    # ----------------------------------------------------
+    # 🐍 PYTHON
+    # ----------------------------------------------------
     - name: Setup Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
-        python-version: "3.10"
+        python-version: "3.11"
 
+    # ----------------------------------------------------
+    # 📚 DEPENDENCIES
+    # ----------------------------------------------------
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r gee-pipeline/requirements.txt
 
+    # ----------------------------------------------------
+    # 🔐 SERVICE ACCOUNT KEY (Earth Engine)
+    # ----------------------------------------------------
     - name: Create service-key.json
-      env:
-        SERVICE_KEY_JSON: ${{ secrets.SERVICE_KEY_JSON }}
       run: |
-        echo "$SERVICE_KEY_JSON" > gee-pipeline/service-key.json
-
-    - name: Authenticate GCP
-      run: |
-        export GOOGLE_APPLICATION_CREDENTIALS=gee-pipeline/service-key.json
-        gcloud auth activate-service-account --key-file=gee-pipeline/service-key.json
+        echo "${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}" > gee-pipeline/service-key.json
 
     # ----------------------------------------------------
     # 🚀 EXPORT (AUTO – incremental only)
     # ----------------------------------------------------
     - name: Export NEW month only
       env:
-        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-        GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
+        GEE_SERVICE_ACCOUNT: gee-runner@geo-analysis-472713.iam.gserviceaccount.com
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
       run: |
         python gee-pipeline/scripts_auto/gee_export_tasks.py
 
     # ----------------------------------------------------
-    # ⏬ DOWNLOAD + CONVERT
+    # ⏬ POLL + DOWNLOAD + CONVERT
     # ----------------------------------------------------
     - name: Poll & Download from GCS
       env:
@@ -59,19 +64,11 @@ jobs:
         python gee-pipeline/scripts_auto/poll_download_convert.py
 
     # ----------------------------------------------------
-    # 🧹 CLEAN
+    # 🧹 CLEAN (NEW MONTH ONLY)
     # ----------------------------------------------------
     - name: Clean new data
       run: |
         python gee-pipeline/scripts_auto/clean_raw_data.py
-
-    - name: Commit CLEAN
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/clean/*
-        git commit -m "AUTO: clean new month" || echo "No changes"
-        git push
 
     # ----------------------------------------------------
     # 🔗 MERGE (APPEND ONLY)
@@ -80,21 +77,20 @@ jobs:
       run: |
         python gee-pipeline/scripts_auto/merge_cleaned.py
 
-    - name: Commit MERGED
-      run: |
-        git add gee-pipeline/outputs/merged/*
-        git commit -m "AUTO: merge append" || echo "No changes"
-        git push
-
     # ----------------------------------------------------
-    # 💉 FINAL FILL
+    # 💉 FINAL FILL AFTER MERGE
     # ----------------------------------------------------
     - name: Final fill
       run: |
         python gee-pipeline/scripts_auto/final_fill_after_merge.py
 
-    - name: Commit FILLED
+    # ----------------------------------------------------
+    # 💾 COMMIT RESULT
+    # ----------------------------------------------------
+    - name: Commit AUTO pipeline result
       run: |
-        git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
-        git commit -m "AUTO: final fill" || echo "No changes"
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+        git add gee-pipeline/outputs
+        git commit -m "AUTO: update monthly dataset" || echo "No changes"
         git push
