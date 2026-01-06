@@ -46,7 +46,7 @@ jobs:
         GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
       run: |
-        python gee-pipeline/scripts_auto/gee_export_incremental.py
+        python gee-pipeline/scripts_auto/gee_export_tasks.py
 
     # ----------------------------------------------------
     # ⏬ DOWNLOAD + CONVERT
