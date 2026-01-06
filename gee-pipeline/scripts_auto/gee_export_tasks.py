@@ -2,30 +2,36 @@ import os
 import ee
 import json
 import pandas as pd
-import time
 from datetime import datetime
-import argparse
+from dateutil.relativedelta import relativedelta
 
-# -----------------------------
-# SAFETY CHECK
-# -----------------------------
 assert "scripts_auto" in __file__, "❌ Wrong script path"
 
-# -----------------------------
-# Paths
-# -----------------------------
 MERGED_PATH = "gee-pipeline/outputs/merged/merged_dataset.parquet"
-RAW_OUTPUT = "raw_export"
-BATCH_SIZE = 20
 
 # -----------------------------
-# Load service account
+# Load last available month
+# -----------------------------
+def get_next_month():
+    df = pd.read_parquet(MERGED_PATH)
+    df["date"] = pd.to_datetime(df["date"])
+    last_date = df["date"].max()
+
+    target = last_date + relativedelta(months=1)
+
+    # ถ้าเดือนนั้นยังไม่ปิด → ไม่ทำ
+    today = datetime.today()
+    if target.year == today.year and target.month == today.month:
+        print("⏸ Month not completed yet")
+        return None
+
+    return target.year, target.month
+
+# -----------------------------
+# GEE auth
 # -----------------------------
 SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-
-with open(KEYFILE, "r") as f:
-    key_data = json.load(f)
 
 credentials = ee.ServiceAccountCredentials(SERVICE_ACCOUNT, KEYFILE)
 ee.Initialize(credentials)
@@ -38,32 +44,32 @@ TAMBON = ee.FeatureCollection(
 )
 
 # -----------------------------
-# Dataset definitions (SAME AS MANUAL)
+# Dataset definitions (เหมือน manual)
 # -----------------------------
 DATASETS = {
     "NDVI": {
         "ic": "MODIS/061/MOD13Q1",
         "scale": 250,
-        "reducer": ee.Reducer.mean(),
         "band": "NDVI",
+        "reducer": ee.Reducer.mean(),
     },
     "LST": {
         "ic": "MODIS/061/MOD11A2",
         "scale": 1000,
-        "reducer": ee.Reducer.mean(),
         "band": "LST_Day_1km",
+        "reducer": ee.Reducer.mean(),
     },
     "SoilMoisture": {
         "ic": "NASA/SMAP/SPL4SMGP/007",
         "scale": 10000,
-        "reducer": ee.Reducer.mean(),
         "band": "sm_surface",
+        "reducer": ee.Reducer.mean(),
     },
     "Rainfall": {
         "ic": "UCSB-CHG/CHIRPS/DAILY",
         "scale": 10000,
-        "reducer": ee.Reducer.sum(),
         "band": "precipitation",
+        "reducer": ee.Reducer.sum(),
     },
     "FireCount": {
         "ic": "MODIS/061/MOD14A1",
@@ -73,8 +79,6 @@ DATASETS = {
 }
 
 # -----------------------------
-# Helpers
-# -----------------------------
 def month_filter(year, month):
     start = ee.Date.fromYMD(year, month, 1)
     end = start.advance(1, "month")
@@ -83,40 +87,11 @@ def month_filter(year, month):
 def prepare_firecount(img):
     return img.select("FireMask").gte(7).rename("FireCount")
 
-def get_last_year_month():
-    if not os.path.exists(MERGED_PATH):
-        return 2015, 1
-
-    df = pd.read_parquet(MERGED_PATH)
-    df["date"] = pd.to_datetime(df["date"])
-    last = df["date"].max()
-    return last.year, last.month
-
-def get_months_to_export():
-    last_y, last_m = get_last_year_month()
-    now = datetime.now()
-
-    months = []
-    y, m = last_y, last_m + 1
-
-    while (y < now.year) or (y == now.year and m <= now.month):
-        months.append((y, m))
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
-
-    return months
-
 # -----------------------------
-# Export one month
-# -----------------------------
-def export_month(year, month, variable, spec):
-
+def export_month(year, month, var, spec):
     ic = ee.ImageCollection(spec["ic"]).filterDate(*month_filter(year, month))
-    scale = spec["scale"]
 
-    if variable == "FireCount":
+    if var == "FireCount":
         ic = ic.map(prepare_firecount)
         img = ic.sum()
         reducer = ee.Reducer.sum()
@@ -127,60 +102,35 @@ def export_month(year, month, variable, spec):
     zonal = img.reduceRegions(
         collection=TAMBON,
         reducer=reducer,
-        scale=scale,
-    )
-
-    zonal = zonal.map(lambda f: f.set({
+        scale=spec["scale"],
+    ).map(lambda f: f.set({
         "year": year,
         "month": month,
-        "variable": variable,
+        "variable": var
     }))
-
-    filename = f"{variable}_{year}_{month:02d}"
 
     task = ee.batch.Export.table.toCloudStorage(
         collection=zonal,
-        description=filename,
+        description=f"{var}_{year}_{month}",
         bucket=os.environ["GCS_BUCKET"],
-        fileNamePrefix=f"{RAW_OUTPUT}/{variable}/{filename}",
+        fileNamePrefix=f"raw_export/{var}/{var}_{year}_{month:02d}",
         fileFormat="GeoJSON",
     )
 
     task.start()
-    return task
+    print(f"🚀 Submitted {var} {year}-{month:02d}")
 
 # -----------------------------
-# Runner
-# -----------------------------
-def main(var):
-    months = get_months_to_export()
-
-    if not months:
-        print("✅ No new month to export")
+def main():
+    target = get_next_month()
+    if target is None:
         return
 
-    print(f"🚀 AUTO EXPORT {var}")
-    print(f"📅 Months: {months}")
+    year, month = target
+    print(f"📅 EXPORT TARGET: {year}-{month:02d}")
 
-    spec = DATASETS[var]
-    count = 0
+    for var, spec in DATASETS.items():
+        export_month(year, month, var, spec)
 
-    for y, m in months:
-        task = export_month(y, m, var, spec)
-        count += 1
-
-        if count % BATCH_SIZE == 0:
-            print("⏳ Waiting for GEE quota…")
-            time.sleep(25)
-
-    print(f"🎉 Submitted {count} tasks for {var}")
-
-# -----------------------------
-# Entry
-# -----------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--var", required=True)
-    args = parser.parse_args()
-
-    main(args.var)
+    main()
