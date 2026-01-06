@@ -43,59 +43,59 @@ jobs:
         GCS_BUCKET:     ${{ secrets.GCS_BUCKET }}
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
       run: |
-        python gee-pipeline/scripts/gee_export_tasks.py --var FireCount
+        python gee-pipeline/scripts/gee_export_tasks.py 
 
-    # --------------------------------------
-    # ⬇️ Poll + Download + Convert
-    # --------------------------------------
-    - name: Download & Convert from GCS
-      env:
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-      run: |
-        python gee-pipeline/scripts/poll_download_convert.py --var FireCount
+    # # --------------------------------------
+    # # ⬇️ Poll + Download + Convert
+    # # --------------------------------------
+    # - name: Download & Convert from GCS
+    #   env:
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #   run: |
+    #     python gee-pipeline/scripts/poll_download_convert.py --var FireCount
 
-    # --------------------------------------
-    # 🧹 CLEAN NEW parquet
-    # --------------------------------------
-    - name: Clean raw parquet
-      run: |
-        python gee-pipeline/scripts/clean_raw_data.py
+    # # --------------------------------------
+    # # 🧹 CLEAN NEW parquet
+    # # --------------------------------------
+    # - name: Clean raw parquet
+    #   run: |
+    #     python gee-pipeline/scripts/clean_raw_data.py
 
-    - name: Commit CLEAN parquet
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/clean/*
-        git commit -m "Automated CLEAN parquet update" || echo "No clean changes"
-        git push
+    # - name: Commit CLEAN parquet
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/clean/*
+    #     git commit -m "Automated CLEAN parquet update" || echo "No clean changes"
+    #     git push
 
-    # --------------------------------------
-    # 🔗 MERGE
-    # --------------------------------------
-    - name: Merge cleaned data
-      run: |
-        python gee-pipeline/scripts/merge_cleaned.py
+    # # --------------------------------------
+    # # 🔗 MERGE
+    # # --------------------------------------
+    # - name: Merge cleaned data
+    #   run: |
+    #     python gee-pipeline/scripts/merge_cleaned.py
 
-    - name: Commit MERGED parquet
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/merged/*
-        git commit -m "Automated MERGE parquet update" || echo "No merge changes"
-        git push
+    # - name: Commit MERGED parquet
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/merged/*
+    #     git commit -m "Automated MERGE parquet update" || echo "No merge changes"
+    #     git push
 
-    # --------------------------------------
-    # 💉 FINAL FILL
-    # --------------------------------------
-    - name: Final fill after merge
-      run: |
-        python gee-pipeline/scripts/final_fill_after_merge.py
+    # # --------------------------------------
+    # # 💉 FINAL FILL
+    # # --------------------------------------
+    # - name: Final fill after merge
+    #   run: |
+    #     python gee-pipeline/scripts/final_fill_after_merge.py
 
-    - name: Commit FINAL FILLED dataset
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
-        git commit -m "Automated FINAL FILL parquet" || echo "No fill changes"
-        git push
+    # - name: Commit FINAL FILLED dataset
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet
+    #     git commit -m "Automated FINAL FILL parquet" || echo "No fill changes"
+    #     git push
