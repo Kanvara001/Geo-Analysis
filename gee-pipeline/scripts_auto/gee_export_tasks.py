@@ -1,27 +1,18 @@
-import ee
 import os
-import time
-import pandas as pd
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
+import json
+import ee
 
-# -----------------------------
-# ASSERT PATH (กันรันผิดที่)
-# -----------------------------
-assert "scripts_auto" in __file__, "❌ Must run from scripts_auto"
+SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
+KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
-# -----------------------------
-# PATHS
-# -----------------------------
-MERGED_PATH = "gee-pipeline/outputs/merged/merged_dataset.parquet"
-RAW_OUTPUT = "raw_export"
-BATCH_SIZE = 10
+with open(KEYFILE, "r") as f:
+    json.load(f)   # validate key
 
-# -----------------------------
-# INIT EARTH ENGINE
-# (ใช้ auth จาก workflow)
-# -----------------------------
-ee.Initialize()
+credentials = ee.ServiceAccountCredentials(
+    SERVICE_ACCOUNT,
+    KEYFILE
+)
+ee.Initialize(credentials)
 
 # -----------------------------
 # LOAD GEOMETRY
