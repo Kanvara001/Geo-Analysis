@@ -12,13 +12,6 @@ from dateutil.relativedelta import relativedelta
 SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
-# validate JSON key
-try:
-    with open(KEYFILE, "r") as f:
-        json.load(f)
-except Exception as e:
-    raise RuntimeError("❌ Invalid service account JSON") from e
-
 credentials = ee.ServiceAccountCredentials(
     SERVICE_ACCOUNT,
     KEYFILE
