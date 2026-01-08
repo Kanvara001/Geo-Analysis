@@ -39,8 +39,19 @@ jobs:
     # 🔐 SERVICE ACCOUNT KEY (Earth Engine)
     # ----------------------------------------------------
     - name: Create service-key.json
+      env:
+        GEE_SERVICE_ACCOUNT_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
       run: |
-        echo "${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}" > gee-pipeline/service-key.json
+        printf '%s' "$GEE_SERVICE_ACCOUNT_KEY" > gee-pipeline/service-key.json
+        
+    - name: DEBUG service key
+      run: |
+        python - <<EOF
+        import json
+        with open("gee-pipeline/service-key.json") as f:
+          json.load(f)
+        print("✅ JSON OK")
+        EOF
 
     # ----------------------------------------------------
     # 🚀 EXPORT (AUTO – incremental only)
