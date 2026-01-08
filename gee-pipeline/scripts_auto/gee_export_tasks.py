@@ -1,29 +1,47 @@
 import os
 import json
+import time
 import ee
+import pandas as pd
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
+# =====================================================
+# 🔐 AUTHENTICATION (FIXED – SERVICE ACCOUNT ONLY)
+# =====================================================
 SERVICE_ACCOUNT = os.environ["SERVICE_ACCOUNT"]
 KEYFILE = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
-with open(KEYFILE, "r") as f:
-    json.load(f)   # validate key
+# validate JSON key
+try:
+    with open(KEYFILE, "r") as f:
+        json.load(f)
+except Exception as e:
+    raise RuntimeError("❌ Invalid service account JSON") from e
 
 credentials = ee.ServiceAccountCredentials(
     SERVICE_ACCOUNT,
     KEYFILE
 )
 ee.Initialize(credentials)
+print("✅ Earth Engine initialized with service account")
 
-# -----------------------------
-# LOAD GEOMETRY
-# -----------------------------
+# =====================================================
+# 📁 PATH CONFIG
+# =====================================================
+MERGED_PATH = "gee-pipeline/outputs/merged/merged_dataset.parquet"
+RAW_OUTPUT = "raw"
+
+# =====================================================
+# 🗺 LOAD GEOMETRY
+# =====================================================
 TAMBON = ee.FeatureCollection(
     "projects/geo-analysis-472713/assets/json_provinces"
 )
 
-# -----------------------------
-# DATASETS
-# -----------------------------
+# =====================================================
+# 📊 DATASETS CONFIG
+# =====================================================
 DATASETS = {
     "NDVI": {
         "ic": "MODIS/061/MOD13Q1",
@@ -56,15 +74,15 @@ DATASETS = {
     },
 }
 
-# -----------------------------
-# FIRE PREPROCESS
-# -----------------------------
+# =====================================================
+# 🔥 FIRE PREPROCESS
+# =====================================================
 def prepare_fire(img):
     return img.select("FireMask").gte(7).rename("FIRECOUNT")
 
-# -----------------------------
-# FIND NEXT MONTH
-# -----------------------------
+# =====================================================
+# 📅 FIND NEXT MONTH (INCREMENTAL)
+# =====================================================
 def get_next_month():
     if not os.path.exists(MERGED_PATH):
         raise RuntimeError("❌ merged_dataset.parquet not found")
@@ -83,9 +101,9 @@ def get_next_month():
 
     return target.year, target.month
 
-# -----------------------------
-# EXPORT ONE MONTH
-# -----------------------------
+# =====================================================
+# 🚀 EXPORT ONE MONTH
+# =====================================================
 def export_month(year, month, var, spec):
 
     start = ee.Date.fromYMD(year, month, 1)
@@ -127,9 +145,9 @@ def export_month(year, month, var, spec):
     print(f"🚀 Export started: {filename}")
     return task
 
-# -----------------------------
-# MAIN
-# -----------------------------
+# =====================================================
+# ▶ MAIN
+# =====================================================
 def main():
     target = get_next_month()
     if target is None:
