@@ -1,8 +1,8 @@
 name: GEE Incremental Monthly Pipeline (AUTO)
 
 on:
-  schedule:
-    - cron: "0 0 2 * *"   # วันที่ 2 ของทุกเดือน (UTC)
+  # schedule:
+  #   - cron: "0 0 2 * *"   # ❌ ปิด cron ไว้ก่อน ตอน debug
   workflow_dispatch:
 
 jobs:
@@ -47,50 +47,50 @@ jobs:
     # ----------------------------------------------------
     - name: Export NEW month only
       env:
-        GEE_SERVICE_ACCOUNT: gee-runner@geo-analysis-472713.iam.gserviceaccount.com
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        SERVICE_ACCOUNT: gee-runner@geo-analysis-472713.iam.gserviceaccount.com
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
         python gee-pipeline/scripts_auto/gee_export_tasks.py
 
     # ----------------------------------------------------
     # ⏬ POLL + DOWNLOAD + CONVERT
     # ----------------------------------------------------
-    - name: Poll & Download from GCS
-      env:
-        GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-        GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
-      run: |
-        python gee-pipeline/scripts_auto/poll_download_convert.py
+    # - name: Poll & Download from GCS
+    #   env:
+    #     GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+    #     GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
+    #   run: |
+    #     python gee-pipeline/scripts_auto/poll_download_convert.py
 
     # ----------------------------------------------------
     # 🧹 CLEAN (NEW MONTH ONLY)
     # ----------------------------------------------------
-    - name: Clean new data
-      run: |
-        python gee-pipeline/scripts_auto/clean_raw_data.py
+    # - name: Clean new data
+    #   run: |
+    #     python gee-pipeline/scripts_auto/clean_raw_data.py
 
     # ----------------------------------------------------
     # 🔗 MERGE (APPEND ONLY)
     # ----------------------------------------------------
-    - name: Merge append
-      run: |
-        python gee-pipeline/scripts_auto/merge_cleaned.py
+    # - name: Merge append
+    #   run: |
+    #     python gee-pipeline/scripts_auto/merge_cleaned.py
 
     # ----------------------------------------------------
     # 💉 FINAL FILL AFTER MERGE
     # ----------------------------------------------------
-    - name: Final fill
-      run: |
-        python gee-pipeline/scripts_auto/final_fill_after_merge.py
+    # - name: Final fill
+    #   run: |
+    #     python gee-pipeline/scripts_auto/final_fill_after_merge.py
 
     # ----------------------------------------------------
     # 💾 COMMIT RESULT
     # ----------------------------------------------------
-    - name: Commit AUTO pipeline result
-      run: |
-        git config --global user.name "github-actions"
-        git config --global user.email "github-actions@github.com"
-        git add gee-pipeline/outputs
-        git commit -m "AUTO: update monthly dataset" || echo "No changes"
-        git push
+    # - name: Commit AUTO pipeline result
+    #   run: |
+    #     git config --global user.name "github-actions"
+    #     git config --global user.email "github-actions@github.com"
+    #     git add gee-pipeline/outputs
+    #     git commit -m "AUTO: update monthly dataset" || echo "No changes"
+    #     git push
