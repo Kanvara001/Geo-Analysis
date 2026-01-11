@@ -2,7 +2,7 @@ name: GEE Incremental Monthly Pipeline (AUTO)
 
 on:
   # schedule:
-  #   - cron: "0 0 2 * *"   # ❌ ปิด cron ไว้ก่อน ตอน debug
+  #   - cron: "0 0 2 * *"   # ❌ ปิด cron ไว้ก่อน (เปิดเมื่อทุกอย่างนิ่ง)
   workflow_dispatch:
 
 jobs:
@@ -43,22 +43,25 @@ jobs:
         GEE_SERVICE_ACCOUNT_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
       run: |
         printf '%s' "$GEE_SERVICE_ACCOUNT_KEY" > gee-pipeline/service-key.json
-        
+
+    # ----------------------------------------------------
+    # 🧪 DEBUG — VALIDATE SERVICE KEY JSON
+    # ----------------------------------------------------
     - name: DEBUG service key
       run: |
         python - <<EOF
         import json
         with open("gee-pipeline/service-key.json") as f:
-          json.load(f)
-        print("✅ JSON OK")
+            json.load(f)
+        print("✅ Service key JSON is valid")
         EOF
 
     # ----------------------------------------------------
-    # 🚀 EXPORT (AUTO – incremental only)
+    # 🚀 EXPORT (AUTO – INCREMENTAL ONLY)
     # ----------------------------------------------------
     - name: Export NEW month only
       env:
-        SERVICE_ACCOUNT: gee-runner@geo-analysis-472713.iam.gserviceaccount.com
+        SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
         GOOGLE_APPLICATION_CREDENTIALS: gee-pipeline/service-key.json
         GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
       run: |
