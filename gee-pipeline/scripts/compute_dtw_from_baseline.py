@@ -45,7 +45,6 @@ def dtw_distance(X, Y):
 # -----------------------------
 print("Loading dataset...")
 df = pd.read_parquet(INPUT_PATH)
-
 df.columns = df.columns.str.strip().str.lower()
 
 required_cols = {"province", "district", "subdistrict", "year", "month"}
@@ -80,6 +79,7 @@ for (province, district, subdistrict), group in df.groupby(
 
 # -----------------------------
 # DTW CALCULATION (per year × subdistrict)
+# + ADD BASELINE COLUMNS
 # -----------------------------
 print("Computing DTW distances...")
 results = []
@@ -99,6 +99,13 @@ for (province, district, subdistrict), group in df.groupby(
             "year": year
         }
 
+        # ---- baseline columns (12 months) ----
+        for var in VARIABLES:
+            baseline_vals = baseline_series[key][var]
+            for m in range(12):
+                row[f"baseline_{var.lower()}_m{m+1:02d}"] = baseline_vals[m]
+
+        # ---- DTW ----
         for var in VARIABLES:
             col = var.lower()
             X = year_group[col].values.astype(float)
