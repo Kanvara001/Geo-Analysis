@@ -70,16 +70,14 @@ for (province, district, subdistrict), group in df.groupby(
 
         for m in range(1, 13):
             vals = group[group["month"] == m][col].dropna().values
-            if len(vals) > 0:
-                monthly_baseline.append(trim_mean(vals, TRIM_RATIO))
-            else:
-                monthly_baseline.append(np.nan)
+            monthly_baseline.append(
+                trim_mean(vals, TRIM_RATIO) if len(vals) > 0 else np.nan
+            )
 
         baseline_series[key][var] = np.array(monthly_baseline)
 
 # -----------------------------
-# DTW CALCULATION (per year × subdistrict)
-# + ADD BASELINE COLUMNS
+# DTW CALCULATION + BASELINE COLUMNS
 # -----------------------------
 print("Computing DTW distances...")
 results = []
@@ -99,7 +97,7 @@ for (province, district, subdistrict), group in df.groupby(
             "year": year
         }
 
-        # ---- baseline columns (12 months) ----
+        # ---- baseline (12 months) ----
         for var in VARIABLES:
             baseline_vals = baseline_series[key][var]
             for m in range(12):
@@ -125,7 +123,7 @@ dtw_df = pd.DataFrame(results)
 # -----------------------------
 # LOCAL STATS (mean, std per subdistrict)
 # -----------------------------
-print("Computing local statistics (mean, std)...")
+print("Computing local statistics...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
@@ -141,52 +139,42 @@ for var in VARIABLES:
         })
     )
 
-    dtw_df = dtw_df.merge(
-        stats,
-        on=["district", "subdistrict"],
-        how="left"
-    )
+    dtw_df = dtw_df.merge(stats, on=["district", "subdistrict"], how="left")
 
 # -----------------------------
-# NORMALIZATION (Z-score per subdistrict)
+# NORMALIZATION (Z-score)
 # -----------------------------
-print("Normalizing DTW (Z-score per subdistrict)...")
+print("Normalizing DTW (Z-score)...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
-
     dtw_df[f"{col}_z"] = (
         dtw_df[col] - dtw_df[f"{col}_local_mean"]
     ) / dtw_df[f"{col}_local_std"]
 
 # -----------------------------
-# LOCAL THRESHOLD (mean + 2σ)
+# GLOBAL Z-SCORE FLAG
 # -----------------------------
-print("Computing local thresholds (mean + 2σ)...")
+print("Applying Z-score threshold...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
-
-    dtw_df[f"{col}_local_threshold"] = (
-        dtw_df[f"{col}_local_mean"] +
-        2 * dtw_df[f"{col}_local_std"]
-    )
-
-    dtw_df[f"{col}_flag"] = (
-        dtw_df[col] > dtw_df[f"{col}_local_threshold"]
-    ).astype(int)
+    dtw_df[f"{col}_z_flag"] = (dtw_df[f"{col}_z"] > Z_THRESHOLD).astype(int)
 
 # -----------------------------
-# GLOBAL THRESHOLD (Z-score)
+# DROP TEMPORARY COLUMNS
 # -----------------------------
-print("Applying global Z-score threshold...")
+print("Dropping temporary columns...")
 
+drop_cols = []
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
+    drop_cols += [
+        f"{col}_local_mean",
+        f"{col}_local_std",
+    ]
 
-    dtw_df[f"{col}_z_flag"] = (
-        dtw_df[f"{col}_z"] > Z_THRESHOLD
-    ).astype(int)
+dtw_df = dtw_df.drop(columns=drop_cols)
 
 # -----------------------------
 # SAVE OUTPUT
