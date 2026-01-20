@@ -26,20 +26,27 @@ jobs:
 
     - name: Run DTW computation
       run: |
+        # สคริปต์นี้จะสร้างไฟล์ชื่อ dtw_results_robust.parquet
         python gee-pipeline/scripts/compute_dtw_from_baseline.py
 
     - name: Upload DTW results
       uses: actions/upload-artifact@v4
       with:
-        name: dtw-results
-        path: gee-pipeline/outputs/merged/dtw_results.parquet
+        name: dtw-results-robust
+        # จุดที่แก้: เปลี่ยนชื่อไฟล์ให้ตรงกับที่ Python สร้างออกมา
+        path: gee-pipeline/outputs/merged/dtw_results_robust.parquet
 
     - name: Commit & push DTW result
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
 
+        # ดึงอัปเดตล่าสุดก่อน เพื่อป้องกันการชนกันของไฟล์
+        git pull origin main || echo "No changes to pull"
+
+        # สั่ง Add ไฟล์ผลลัพธ์ใหม่ (Robust)
         git add gee-pipeline/outputs/merged/dtw_results_robust.parquet
-        git add gee-pipeline/outputs/merged/dtw_results.parquet
-        git commit -m "Auto: update DTW results" || echo "No changes to commit"
+        
+        # Commit และ Push
+        git commit -m "Auto: update Robust DTW results" || echo "No changes to commit"
         git push
