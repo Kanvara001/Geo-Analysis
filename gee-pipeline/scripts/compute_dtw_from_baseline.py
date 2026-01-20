@@ -1,20 +1,22 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import trim_mean
+from scipy.stats import median_abs_deviation
 from pathlib import Path
 
 # -----------------------------
 # CONFIG
 # -----------------------------
 INPUT_PATH = "gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet"
-OUTPUT_PATH = "gee-pipeline/outputs/merged/dtw_results.parquet"
+OUTPUT_PATH = "gee-pipeline/outputs/merged/dtw_results_robust.parquet"
 
 VARIABLES = ["NDVI", "RAINFALL", "SOILMOISTURE", "LST", "FIRECOUNT"]
-TRIM_RATIO = 0.1
-Z_THRESHOLD = 2.0
+
+# Threshold ตามงานวิจัย Robust Anomaly Detection (Iglewicz & Hoaglin, 1993)
+# ค่า 3.5 ถือเป็นจุดตัดมาตรฐานสำหรับ Modified Z-score
+ROBUST_THRESHOLD = 3.5 
 
 # -----------------------------
-# DTW FUNCTIONS
+# DTW FUNCTIONS (Standard)
 # -----------------------------
 def compute_cost_matrix(X, Y):
     N, M = len(X), len(Y)
@@ -23,7 +25,6 @@ def compute_cost_matrix(X, Y):
         for j in range(M):
             C[i, j] = abs(X[i] - Y[j])
     return C
-
 
 def dtw_distance(X, Y):
     C = compute_cost_matrix(X, Y)
@@ -41,6 +42,14 @@ def dtw_distance(X, Y):
     return D[N, M]
 
 # -----------------------------
+# HELPER: ROBUST STATS
+# -----------------------------
+def calculate_mad(x):
+    # scale='normal' จะคูณด้วย 1.4826 (1/0.6745) ให้โดยอัตโนมัติ
+    # เพื่อให้ MAD มีสเกลเทียบเท่า Standard Deviation
+    return median_abs_deviation(x, scale='normal')
+
+# -----------------------------
 # LOAD DATA
 # -----------------------------
 print("Loading dataset...")
@@ -53,9 +62,10 @@ if missing:
     raise ValueError(f"Missing required columns: {missing}")
 
 # -----------------------------
-# BASELINE (trimmed mean per month per SUBDISTRICT)
+# 1. ROBUST BASELINE (Median per month per SUBDISTRICT)
 # -----------------------------
-print("Computing baseline (local subdistrict baseline)...")
+# เปลี่ยนจาก trim_mean เป็น median เพื่อความทนทานต่อ outlier สูงสุด
+print("Computing robust baseline (Median)...")
 baseline_series = {}
 
 for (province, district, subdistrict), group in df.groupby(
@@ -69,15 +79,15 @@ for (province, district, subdistrict), group in df.groupby(
         monthly_baseline = []
 
         for m in range(1, 13):
+            # ใช้ Median ของเดือนนั้นๆ จากข้อมูลประวัติทั้งหมด
             vals = group[group["month"] == m][col].dropna().values
-            monthly_baseline.append(
-                trim_mean(vals, TRIM_RATIO) if len(vals) > 0 else np.nan
-            )
+            val_median = np.median(vals) if len(vals) > 0 else np.nan
+            monthly_baseline.append(val_median)
 
         baseline_series[key][var] = np.array(monthly_baseline)
 
 # -----------------------------
-# DTW CALCULATION + BASELINE COLUMNS
+# 2. DTW CALCULATION
 # -----------------------------
 print("Computing DTW distances...")
 results = []
@@ -97,18 +107,19 @@ for (province, district, subdistrict), group in df.groupby(
             "year": year
         }
 
-        # ---- baseline (12 months) ----
+        # ---- baseline values (Optional: เก็บไว้ดูเทียบ) ----
         for var in VARIABLES:
             baseline_vals = baseline_series[key][var]
             for m in range(12):
                 row[f"baseline_{var.lower()}_m{m+1:02d}"] = baseline_vals[m]
 
-        # ---- DTW ----
+        # ---- DTW Distance ----
         for var in VARIABLES:
             col = var.lower()
-            X = year_group[col].values.astype(float)
-            Y = baseline_series[key][var].astype(float)
+            X = year_group[col].values.astype(float) # ข้อมูลปีปัจจุบัน
+            Y = baseline_series[key][var].astype(float) # Baseline (Median Profile)
 
+            # ตรวจสอบความสมบูรณ์ของข้อมูล
             if len(X) != 12 or np.isnan(X).any() or np.isnan(Y).any():
                 dist = np.nan
             else:
@@ -121,66 +132,69 @@ for (province, district, subdistrict), group in df.groupby(
 dtw_df = pd.DataFrame(results)
 
 # -----------------------------
-# LOCAL STATS (mean, std per subdistrict)
+# 3. ROBUST NORMALIZATION (Modified Z-score)
 # -----------------------------
-print("Computing local statistics...")
+print("Computing Robust Statistics (Median & MAD) and Anomaly Scores...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
-
+    
+    # คำนวณ Median และ MAD ของค่า DTW ในแต่ละตำบล (Subdistrict)
+    # เพื่อสร้าง Distribution Profile ของความผิดปกติในพื้นที่นั้น
     stats = (
         dtw_df
         .groupby(["district", "subdistrict"])[col]
-        .agg(["mean", "std"])
+        .agg(
+            local_median="median", 
+            local_mad=calculate_mad
+        )
         .reset_index()
         .rename(columns={
-            "mean": f"{col}_local_mean",
-            "std": f"{col}_local_std"
+            "local_median": f"{col}_median",
+            "local_mad": f"{col}_mad"
         })
     )
 
+    # Merge ค่าสถิติกลับเข้าไป
     dtw_df = dtw_df.merge(stats, on=["district", "subdistrict"], how="left")
 
+    # คำนวณ Modified Z-score
+    # สูตร: 0.6745 * (x - median) / MAD
+    # หมายเหตุ: ฟังก์ชัน calculate_mad ด้านบนใส่ scale='normal' ไว้แล้ว
+    # ซึ่งเทียบเท่ากับหารด้วย 1/0.6745 ดังนั้นเราแค่หารด้วย MAD ได้เลย
+    
+    # ป้องกันการหารด้วย 0 กรณี MAD เป็น 0 (ข้อมูลนิ่งมาก)
+    dtw_df[f"{col}_mod_z"] = np.where(
+        dtw_df[f"{col}_mad"] == 0,
+        0, # หรือ np.nan ขึ้นอยู่กับว่าอยากจัดการยังไง ถ้า MAD=0 แปลว่าข้อมูลเหมือนเดิมตลอด
+        (dtw_df[col] - dtw_df[f"{col}_median"]) / dtw_df[f"{col}_mad"]
+    )
+
 # -----------------------------
-# NORMALIZATION (Z-score)
+# 4. ANOMALY FLAGGING (Robust Threshold)
 # -----------------------------
-print("Normalizing DTW (Z-score)...")
+print(f"Applying Robust Threshold (> {ROBUST_THRESHOLD})...")
 
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
-    dtw_df[f"{col}_z"] = (
-        dtw_df[col] - dtw_df[f"{col}_local_mean"]
-    ) / dtw_df[f"{col}_local_std"]
+    # เช็คค่า Absolute ของ Z-score เพราะผิดปกติอาจจะมากไปหรือน้อยไปก็ได้
+    # แต่ปกติ DTW ยิ่งมากยิ่งผิดปกติ ดังนั้นดูค่าบวกอย่างเดียวน่าจะ make sense กว่าในบริบทนี้
+    # แต่ถ้าใช้ Z-score ปกติจะดู 2 ฝั่ง (ในที่นี้ DTW min คือ 0 ดังนั้นดูค่าบวกอย่างเดียวคือถูกต้องแล้ว)
+    dtw_df[f"{col}_anomaly_flag"] = (dtw_df[f"{col}_mod_z"] > ROBUST_THRESHOLD).astype(int)
 
 # -----------------------------
-# GLOBAL Z-SCORE FLAG
-# -----------------------------
-print("Applying Z-score threshold...")
-
-for var in VARIABLES:
-    col = f"dtw_{var.lower()}"
-    dtw_df[f"{col}_z_flag"] = (dtw_df[f"{col}_z"] > Z_THRESHOLD).astype(int)
-
-# -----------------------------
-# DROP TEMPORARY COLUMNS
+# CLEANUP & SAVE
 # -----------------------------
 print("Dropping temporary columns...")
-
 drop_cols = []
 for var in VARIABLES:
     col = f"dtw_{var.lower()}"
-    drop_cols += [
-        f"{col}_local_mean",
-        f"{col}_local_std",
-    ]
+    drop_cols += [f"{col}_median", f"{col}_mad"]
 
 dtw_df = dtw_df.drop(columns=drop_cols)
 
-# -----------------------------
-# SAVE OUTPUT
-# -----------------------------
 Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
 dtw_df.to_parquet(OUTPUT_PATH, index=False)
 
-print("DTW computation finished.")
+print("Robust DTW Anomaly Detection finished.")
 print(f"Saved to {OUTPUT_PATH}")
