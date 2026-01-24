@@ -8,10 +8,8 @@ from pathlib import Path
 # =====================================================
 INPUT_PATH = "gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet"
 
-OUTPUT_BASE = "gee-pipeline/outputs"
-OUTPUT_DTW = f"{OUTPUT_BASE}/merged/dtw_results_normalized.parquet"
-OUTPUT_DISTRICT = f"{OUTPUT_BASE}/aggregated/district_anomaly_summary.parquet"
-OUTPUT_PROVINCE = f"{OUTPUT_BASE}/aggregated/province_anomaly_summary.parquet"
+OUTPUT_DISTRICT = "gee-pipeline/outputs/aggregated/district_dtw_results.parquet"
+OUTPUT_PROVINCE = "gee-pipeline/outputs/aggregated/province_dtw_results.parquet"
 
 VARIABLES = ["NDVI", "RAINFALL", "SOILMOISTURE", "LST", "FIRECOUNT"]
 
@@ -29,7 +27,6 @@ def compute_cost_matrix(X, Y):
             C[i, j] = abs(X[i] - Y[j])
     return C
 
-
 def dtw_distance(X, Y):
     C = compute_cost_matrix(X, Y)
     N, M = C.shape
@@ -45,10 +42,8 @@ def dtw_distance(X, Y):
             )
     return D[N, M]
 
-
 def calculate_mad(x):
     return median_abs_deviation(x, scale="normal")
-
 
 # =====================================================
 # LOAD DATA
@@ -58,177 +53,138 @@ df = pd.read_parquet(INPUT_PATH)
 df.columns = df.columns.str.strip().str.lower()
 
 # =====================================================
-# 1. COMPUTE ROBUST BASELINE (Median Jan–Dec)
+# FUNCTION: RUN PIPELINE FOR ANY LEVEL
 # =====================================================
-print("Computing robust baseline (per subdistrict)...")
-baseline_series = {}
+def run_dtw_pipeline(df, group_cols, output_path):
+    """
+    group_cols:
+      - ["province", "district"]  -> district level
+      - ["province"]              -> province level
+    """
 
-for (province, district, subdistrict), group in df.groupby(
-    ["province", "district", "subdistrict"]
-):
-    key = (province, district, subdistrict)
-    baseline_series[key] = {}
+    # -------------------------------------------------
+    # 1. AGG TO MONTHLY (MEAN)
+    # -------------------------------------------------
+    print(f"Agg monthly data for {group_cols}...")
 
-    for var in VARIABLES:
-        col = var.lower()
-        monthly_vals = [
-            group[group["month"] == m][col].dropna().values
-            for m in range(1, 13)
-        ]
+    agg_dict = {v.lower(): "mean" for v in VARIABLES}
 
-        baseline_series[key][var] = np.array(
-            [np.median(v) if len(v) > 0 else np.nan for v in monthly_vals]
-        )
+    monthly = (
+        df
+        .groupby(group_cols + ["year", "month"], as_index=False)
+        .agg(agg_dict)
+    )
 
-# =====================================================
-# 2. COMPUTE DTW PER YEAR (SUBDISTRICT)
-# =====================================================
-print("Computing DTW per year...")
-results = []
+    # -------------------------------------------------
+    # 2. COMPUTE ROBUST BASELINE (Median Jan–Dec)
+    # -------------------------------------------------
+    print("Computing robust baseline...")
+    baseline_series = {}
 
-for (province, district, subdistrict), group in df.groupby(
-    ["province", "district", "subdistrict"]
-):
-    key = (province, district, subdistrict)
+    for keys, group in monthly.groupby(group_cols):
+        baseline_series[keys] = {}
 
-    for year, year_group in group.groupby("year"):
-        year_group = year_group.sort_values("month")
-
-        row = {
-            "province": province,
-            "district": district,
-            "subdistrict": subdistrict,
-            "year": year,
-        }
-
-        # store baseline
-        for var in VARIABLES:
-            baseline_vals = baseline_series[key][var]
-            for m in range(12):
-                row[f"baseline_{var.lower()}_m{m+1:02d}"] = baseline_vals[m]
-
-        # compute DTW
         for var in VARIABLES:
             col = var.lower()
-            X = year_group[col].values.astype(float)
-            Y = baseline_series[key][var].astype(float)
+            monthly_vals = [
+                group[group["month"] == m][col].dropna().values
+                for m in range(1, 13)
+            ]
 
-            if len(X) != 12 or np.isnan(X).any() or np.isnan(Y).any():
-                row[f"dtw_{col}"] = np.nan
-            else:
-                row[f"dtw_{col}"] = dtw_distance(X, Y)
+            baseline_series[keys][var] = np.array(
+                [np.median(v) if len(v) > 0 else np.nan for v in monthly_vals]
+            )
 
-        results.append(row)
+    # -------------------------------------------------
+    # 3. COMPUTE DTW PER YEAR
+    # -------------------------------------------------
+    print("Computing DTW...")
+    rows = []
 
-dtw_df = pd.DataFrame(results)
+    for keys, group in monthly.groupby(group_cols):
+        for year, year_group in group.groupby("year"):
+            year_group = year_group.sort_values("month")
 
-# =====================================================
-# 3. MODIFIED Z-SCORE + ROBUST NORMALIZATION
-# =====================================================
-print("Computing robust anomaly index & flags...")
+            row = {col: val for col, val in zip(group_cols, keys if isinstance(keys, tuple) else [keys])}
+            row["year"] = year
 
-for var in VARIABLES:
-    col = var.lower()
-    col_dtw = f"dtw_{col}"
+            # store baseline
+            for var in VARIABLES:
+                base = baseline_series[keys][var]
+                for m in range(12):
+                    row[f"baseline_{var.lower()}_m{m+1:02d}"] = base[m]
 
-    stats = (
-        dtw_df
-        .groupby(["district", "subdistrict"])[col_dtw]
-        .agg(
-            local_median="median",
-            local_mad=calculate_mad
+            # DTW
+            for var in VARIABLES:
+                col = var.lower()
+                X = year_group[col].values.astype(float)
+                Y = baseline_series[keys][var].astype(float)
+
+                if len(X) != 12 or np.isnan(X).any() or np.isnan(Y).any():
+                    row[f"dtw_{col}"] = np.nan
+                else:
+                    row[f"dtw_{col}"] = dtw_distance(X, Y)
+
+            rows.append(row)
+
+    dtw_df = pd.DataFrame(rows)
+
+    # -------------------------------------------------
+    # 4. MODIFIED Z-SCORE + ROBUST NORMALIZATION
+    # -------------------------------------------------
+    print("Computing robust anomaly metrics...")
+
+    for var in VARIABLES:
+        col_dtw = f"dtw_{var.lower()}"
+
+        stats = (
+            dtw_df
+            .groupby(group_cols)[col_dtw]
+            .agg(local_median="median", local_mad=calculate_mad)
+            .reset_index()
         )
-        .reset_index()
-    )
 
-    dtw_df = dtw_df.merge(stats, on=["district", "subdistrict"], how="left")
+        dtw_df = dtw_df.merge(stats, on=group_cols, how="left")
 
-    mod_z = f"{col_dtw}_mod_z"
-    dtw_df[mod_z] = np.where(
-        dtw_df["local_mad"] == 0,
-        0,
-        0.6745 * (dtw_df[col_dtw] - dtw_df["local_median"]) / dtw_df["local_mad"]
-    )
-
-    # Robust score normalization (0–1)
-    dtw_df[f"{col_dtw}_index"] = (
-        np.clip(np.abs(dtw_df[mod_z]), 0, SCORE_CEILING) / SCORE_CEILING
-    )
-
-    # Anomaly flag
-    dtw_df[f"{col_dtw}_anomaly_flag"] = (
-        np.abs(dtw_df[mod_z]) > ROBUST_THRESHOLD
-    ).astype(int)
-
-    dtw_df.drop(columns=["local_median", "local_mad", mod_z], inplace=True)
-
-# =====================================================
-# 4. AGGREGATION – DISTRICT LEVEL
-# =====================================================
-print("Aggregating at DISTRICT level...")
-
-district_frames = []
-
-for var in VARIABLES:
-    col = var.lower()
-
-    tmp = (
-        dtw_df
-        .groupby(["province", "district", "year"])
-        .agg(
-            anomaly_count=(f"dtw_{col}_anomaly_flag", "sum"),
-            anomaly_rate=(f"dtw_{col}_anomaly_flag", "mean"),
-            severity_mean=(f"dtw_{col}_index", "mean"),
-            severity_max=(f"dtw_{col}_index", "max"),
+        mod_z = f"{col_dtw}_mod_z"
+        dtw_df[mod_z] = np.where(
+            dtw_df["local_mad"] == 0,
+            0,
+            0.6745 * (dtw_df[col_dtw] - dtw_df["local_median"]) / dtw_df["local_mad"]
         )
-        .reset_index()
-    )
 
-    tmp["variable"] = col
-    district_frames.append(tmp)
-
-district_df = pd.concat(district_frames, ignore_index=True)
-
-# =====================================================
-# 5. AGGREGATION – PROVINCE LEVEL
-# =====================================================
-print("Aggregating at PROVINCE level...")
-
-province_frames = []
-
-for var in VARIABLES:
-    col = var.lower()
-
-    tmp = (
-        dtw_df
-        .groupby(["province", "year"])
-        .agg(
-            anomaly_count=(f"dtw_{col}_anomaly_flag", "sum"),
-            anomaly_rate=(f"dtw_{col}_anomaly_flag", "mean"),
-            severity_mean=(f"dtw_{col}_index", "mean"),
-            severity_max=(f"dtw_{col}_index", "max"),
+        dtw_df[f"{col_dtw}_index"] = (
+            np.clip(np.abs(dtw_df[mod_z]), 0, SCORE_CEILING) / SCORE_CEILING
         )
-        .reset_index()
-    )
 
-    tmp["variable"] = col
-    province_frames.append(tmp)
+        dtw_df[f"{col_dtw}_anomaly_flag"] = (
+            np.abs(dtw_df[mod_z]) > ROBUST_THRESHOLD
+        ).astype(int)
 
-province_df = pd.concat(province_frames, ignore_index=True)
+        dtw_df.drop(columns=["local_median", "local_mad", mod_z], inplace=True)
+
+    # -------------------------------------------------
+    # SAVE
+    # -------------------------------------------------
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    dtw_df.to_parquet(output_path, index=False)
+    print(f"Saved → {output_path}")
 
 # =====================================================
-# SAVE OUTPUTS
+# RUN PIPELINES
 # =====================================================
-Path(OUTPUT_DTW).parent.mkdir(parents=True, exist_ok=True)
-Path(OUTPUT_DISTRICT).parent.mkdir(parents=True, exist_ok=True)
+run_dtw_pipeline(
+    df,
+    group_cols=["province", "district"],
+    output_path=OUTPUT_DISTRICT
+)
 
-dtw_df.to_parquet(OUTPUT_DTW, index=False)
-district_df.to_parquet(OUTPUT_DISTRICT, index=False)
-province_df.to_parquet(OUTPUT_PROVINCE, index=False)
+run_dtw_pipeline(
+    df,
+    group_cols=["province"],
+    output_path=OUTPUT_PROVINCE
+)
 
 print("------------------------------------------------")
 print("PIPELINE FINISHED SUCCESSFULLY")
-print(f"Subdistrict DTW   : {OUTPUT_DTW}")
-print(f"District summary  : {OUTPUT_DISTRICT}")
-print(f"Province summary  : {OUTPUT_PROVINCE}")
 print("------------------------------------------------")
