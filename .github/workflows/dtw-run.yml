@@ -29,13 +29,14 @@ jobs:
         # สคริปต์นี้ตอนนี้จะสร้างไฟล์ชื่อ dtw_results_normalized.parquet
         python gee-pipeline/scripts/compute_dtw_from_baseline.py
 
-    - name: Upload DTW results
+    - name: Upload DTW & Aggregated results
       uses: actions/upload-artifact@v4
       with:
-        # เปลี่ยนชื่อ Artifact ให้สื่อความหมาย
-        name: dtw-results-normalized
-        # *** จุดที่แก้ 1: เปลี่ยนชื่อไฟล์ให้ตรงกับ Python output ***
-        path: gee-pipeline/outputs/merged/dtw_results_normalized.parquet
+        name: dtw-results-all-levels
+        path: |
+          gee-pipeline/outputs/merged/dtw_results_normalized.parquet
+          gee-pipeline/outputs/aggregated/
+
 
     - name: Commit & push DTW result
       run: |
@@ -47,10 +48,8 @@ jobs:
 
         # *** จุดที่แก้ 2: สั่ง Add ไฟล์ใหม่ (Normalized) ***
         git add gee-pipeline/outputs/merged/dtw_results_normalized.parquet
-        
-        # (Optional) ถ้าอยากลบไฟล์แบบเก่าทิ้งเพื่อไม่ให้รก repo ให้ uncomment บรรทัดล่างนี้
-        # git rm --cached gee-pipeline/outputs/merged/dtw_results_robust.parquet || true
+        git add gee-pipeline/outputs/aggregated/
         
         # *** จุดที่แก้ 3: เปลี่ยนข้อความ Commit ***
-        git commit -m "Auto: update Normalized DTW results (0-1 Index)" || echo "No changes to commit"
+        git commit -m "Auto: update DTW anomaly results (subdistrict, district, province)" || echo "No changes to commit"
         git push
