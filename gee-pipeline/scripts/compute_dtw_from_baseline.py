@@ -8,16 +8,18 @@ from pathlib import Path
 # =====================================================
 INPUT_PATH = "gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet"
 
+# เพิ่ม Output Path สำหรับระดับตำบล (Sub-district)
+OUTPUT_SUBDISTRICT = "gee-pipeline/outputs/aggregated/subdistrict_dtw_results.parquet"
 OUTPUT_DISTRICT = "gee-pipeline/outputs/aggregated/district_dtw_results.parquet"
 OUTPUT_PROVINCE = "gee-pipeline/outputs/aggregated/province_dtw_results.parquet"
 
 VARIABLES = ["NDVI", "RAINFALL", "SOILMOISTURE", "LST", "FIRECOUNT"]
 
 # Reference: Iglewicz & Hoaglin (1993) / Zhu & Woodcock (2014)
-# 3.5 is a conservative threshold for small/moderate datasets to avoid false alarms.
+# 3.5 is a conservative threshold.
 ROBUST_THRESHOLD = 3.5 
 
-# Reference: OECD (2008) - Winsorization ceiling for index construction
+# Reference: OECD (2008) - Winsorization ceiling
 SCORE_CEILING = 5.0
 
 # =====================================================
@@ -77,7 +79,14 @@ def run_dtw_pipeline(df, group_cols, output_path):
     4. Modified Z-Score (Iglewicz & Hoaglin)
     5. Index Normalization (0-1)
     """
-    level_name = "District" if "district" in group_cols else "Province"
+    # Create a label for display based on columns
+    if "subdistrict" in group_cols:
+        level_name = "Sub-district"
+    elif "district" in group_cols:
+        level_name = "District"
+    else:
+        level_name = "Province"
+        
     print(f"\n--- Processing Level: {level_name} ---")
 
     # -------------------------------------------------
@@ -104,7 +113,7 @@ def run_dtw_pipeline(df, group_cols, output_path):
 
         for var in VARIABLES:
             col = var.lower()
-            # Collect data for each month (1-12) across all years
+            # Collect data for each month (1-12)
             monthly_vals = [
                 group[group["month"] == m][col].dropna().values
                 for m in range(1, 13)
@@ -133,19 +142,18 @@ def run_dtw_pipeline(df, group_cols, output_path):
             row = base_info.copy()
             row["year"] = year
 
-            # (Optional) Store baseline values for reference
+            # (Optional) Store baseline values
             for var in VARIABLES:
                 base = baseline_series[keys][var]
                 for m in range(12):
                     row[f"baseline_{var.lower()}_m{m+1:02d}"] = base[m]
 
-            # Calculate DTW for each variable
+            # Calculate DTW
             for var in VARIABLES:
                 col = var.lower()
                 X = year_group[col].values.astype(float)
                 Y = baseline_series[keys][var].astype(float)
 
-                # Validate data completeness (must have 12 months)
                 if len(X) != 12 or np.isnan(X).any() or np.isnan(Y).any():
                     row[f"dtw_{col}"] = np.nan
                 else:
@@ -157,15 +165,13 @@ def run_dtw_pipeline(df, group_cols, output_path):
 
     # -------------------------------------------------
     # 4. MODIFIED Z-SCORE + NORMALIZATION
-    # Reference: Iglewicz & Hoaglin (1993) for Mod-Z
-    # Reference: OECD (2008) for Winsorization
+    # Reference: Iglewicz & Hoaglin (1993) / OECD (2008)
     # -------------------------------------------------
     print("Step 4: Computing Anomaly Scores & Indexing...")
 
     for var in VARIABLES:
         col_dtw = f"dtw_{var.lower()}"
 
-        # Calculate Median and Raw MAD per location (group_cols)
         stats = (
             dtw_df
             .groupby(group_cols)[col_dtw]
@@ -175,28 +181,24 @@ def run_dtw_pipeline(df, group_cols, output_path):
 
         dtw_df = dtw_df.merge(stats, on=group_cols, how="left")
 
-        # --- A. Modified Z-Score Calculation ---
         # Formula: M_i = 0.6745 * (x - median) / MAD
         mod_z = f"{col_dtw}_mod_z"
         dtw_df[mod_z] = np.where(
             dtw_df["local_mad"] == 0,
-            0, # Avoid division by zero if MAD is 0
+            0,
             0.6745 * (dtw_df[col_dtw] - dtw_df["local_median"]) / dtw_df["local_mad"]
         )
 
-        # --- B. Index Normalization (0-1) ---
-        # Clip at ceiling (Winsorization) then Scale
+        # Index (0-1) using Winsorization
         dtw_df[f"{col_dtw}_index"] = (
             np.clip(np.abs(dtw_df[mod_z]), 0, SCORE_CEILING) / SCORE_CEILING
         )
 
-        # --- C. Anomaly Flagging ---
-        # Threshold > 3.5 (Conservative)
+        # Anomaly Flag (> 3.5)
         dtw_df[f"{col_dtw}_anomaly_flag"] = (
             np.abs(dtw_df[mod_z]) > ROBUST_THRESHOLD
         ).astype(int)
 
-        # Cleanup temporary columns
         dtw_df.drop(columns=["local_median", "local_mad", mod_z], inplace=True)
 
     # -------------------------------------------------
@@ -209,14 +211,26 @@ def run_dtw_pipeline(df, group_cols, output_path):
 # =====================================================
 # EXECUTION
 # =====================================================
-# 1. District Level
+
+# 1. Sub-district Level (ระดับตำบล) - ละเอียดสุด
+# ตรวจสอบชื่อคอลัมน์ "subdistrict" ว่ามีอยู่จริงหรือไม่
+if "subdistrict" in df.columns:
+    run_dtw_pipeline(
+        df,
+        group_cols=["province", "district", "subdistrict"],
+        output_path=OUTPUT_SUBDISTRICT
+    )
+else:
+    print("⚠️ Warning: ไม่พบคอลัมน์ 'subdistrict' ในไฟล์ข้อมูล")
+
+# 2. District Level (ระดับอำเภอ)
 run_dtw_pipeline(
     df,
     group_cols=["province", "district"],
     output_path=OUTPUT_DISTRICT
 )
 
-# 2. Province Level
+# 3. Province Level (ระดับจังหวัด)
 run_dtw_pipeline(
     df,
     group_cols=["province"],
