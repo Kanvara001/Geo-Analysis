@@ -8,8 +8,9 @@ from pathlib import Path
 # =====================================================
 INPUT_PATH = "gee-pipeline/outputs/merged/merged_dataset_FILLED.parquet"
 
-# Output Path สำหรับระดับตำบล และระดับจังหวัด เท่านั้น
+# กำหนดเส้นทาง Output ให้ครบ 3 ระดับ
 OUTPUT_SUBDISTRICT = "gee-pipeline/outputs/aggregated/subdistrict_dtw_results.parquet"
+OUTPUT_DISTRICT = "gee-pipeline/outputs/aggregated/district_dtw_results.parquet"
 OUTPUT_PROVINCE = "gee-pipeline/outputs/aggregated/province_dtw_results.parquet"
 
 VARIABLES = ["NDVI", "RAINFALL", "SOILMOISTURE", "LST", "FIRECOUNT"]
@@ -55,9 +56,16 @@ def run_dtw_pipeline(df, group_cols, output_path):
     1. Aggregation -> Monthly Mean
     2. Baseline -> Monthly Median
     3. DTW Calculation
-    4. Modified Z-Score Indexing (No Flag, No Winsorization)
+    4. Modified Z-Score Indexing (Index Only)
     """
-    level_name = "Sub-district" if "subdistrict" in group_cols else "Province"
+    # กำหนดชื่อระดับเพื่อการแสดงผล Log
+    if "subdistrict" in group_cols:
+        level_name = "Sub-district"
+    elif "district" in group_cols:
+        level_name = "District"
+    else:
+        level_name = "Province"
+        
     print(f"\n--- Processing Level: {level_name} ---")
 
     # 1. AGG TO MONTHLY
@@ -100,12 +108,12 @@ def run_dtw_pipeline(df, group_cols, output_path):
 
     dtw_df = pd.DataFrame(rows)
 
-    # 4. MODIFIED Z-SCORE INDEXING (INDEX ONLY)
+    # 4. MODIFIED Z-SCORE INDEXING
     print("Step 4: Computing Anomaly Index (Absolute Modified Z-Score)...")
     for var in VARIABLES:
         col_dtw = f"dtw_{var.lower()}"
         
-        # Calculate Local Statistics
+        # Calculate Local Statistics (Median & MAD ของค่า DTW ในพื้นที่นั้นๆ)
         stats = (
             dtw_df.groupby(group_cols)[col_dtw]
             .agg(local_median="median", local_mad=calculate_raw_mad)
@@ -113,8 +121,7 @@ def run_dtw_pipeline(df, group_cols, output_path):
         )
         dtw_df = dtw_df.merge(stats, on=group_cols, how="left")
 
-        # Formula: Index = | 0.6745 * (x - median) / MAD |
-        # ไม่มีการใช้ Winsorization และไม่มีการสร้าง Anomaly Flag
+        # สูตร: Index = | 0.6745 * (x - median) / MAD |
         dtw_df[f"{col_dtw}_index"] = np.where(
             dtw_df["local_mad"] == 0,
             0,
@@ -136,14 +143,18 @@ print(f"Loading dataset from: {INPUT_PATH}")
 df = pd.read_parquet(INPUT_PATH)
 df.columns = df.columns.str.strip().str.lower()
 
-# 1. Sub-district Level
+# 1. Sub-district Level (ระดับตำบล)
 if "subdistrict" in df.columns:
     run_dtw_pipeline(df, ["province", "district", "subdistrict"], OUTPUT_SUBDISTRICT)
 
-# 2. Province Level
+# 2. District Level (ระดับอำเภอ) - เพิ่มกลับเข้ามาแล้ว
+if "district" in df.columns:
+    run_dtw_pipeline(df, ["province", "district"], OUTPUT_DISTRICT)
+
+# 3. Province Level (ระดับจังหวัด)
 run_dtw_pipeline(df, ["province"], OUTPUT_PROVINCE)
 
 print("\n" + "="*50)
-print("PIPELINE COMPLETED: PROVINCE & SUB-DISTRICT")
+print("PIPELINE COMPLETED: ALL LEVELS (SUB-DISTRICT, DISTRICT, PROVINCE)")
 print("INDEX ONLY (NO WINSORIZATION / NO FLAGS)")
 print("="*50)
